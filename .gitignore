@@ -1,0 +1,77 @@
+# Environment variables
+.env
+.env.*
+!.env.example
+*.env
+
+# Tests and caches
+backend/tests/.cache/
+tests/.cache/
+tests/out_*.json
+backend/tests/out_*.json
+backend/tests/samples_results.json
+
+# Certificates (ignore local user certs, keep trusted root ca bundle)
+*.pem
+!certs/russian_trusted_root_ca.pem
+!backend/certs/russian_trusted_root_ca.pem
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Node / Frontend
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+frontend/dist/
+frontend/dist-ssr/
+*.local
+
+# Editor & OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Audio temporary files / uploads
+*.ogg
+*.wav
+*.mp3
+*.m4a
+.local_db.json

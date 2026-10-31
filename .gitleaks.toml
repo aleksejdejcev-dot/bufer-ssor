@@ -1,0 +1,13 @@
+# Конфигурация сканера секретов Gitleaks для проекта «Буфер Ссор»
+title = "Gitleaks Buffer Ssor Config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Игнорирование локальных env, примеров и фикстур тестов"
+paths = [
+    '''\.env$''',
+    '''\.env\.example$''',
+    '''backend/certs/russian_trusted_root_ca\.pem$''',
+]

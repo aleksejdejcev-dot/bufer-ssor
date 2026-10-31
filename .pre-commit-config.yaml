@@ -1,0 +1,6 @@
+# Pre-commit hooks configuration
+repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.24.0
+    hooks:
+      - id: gitleaks
