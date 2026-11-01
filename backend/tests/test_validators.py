@@ -359,5 +359,167 @@ def test_stage_3_10_leak_guard_analyzer_filter():
     assert "планёрк" not in sanitized_hyp.likely_feelings[0]
 
 
+def test_stage_3_11_sparse_validation_and_followup():
+    """Проверка сборки и валидации sparse-карточек, пометки о краткости и сброса при followup."""
+    from ai_service import format_sparse_validation
+    from config.fallbacks import (
+        SPARSE_SHORTNESS_PREFIXES,
+        FALLBACK_SPARSE_VALIDATION_OPTIONS,
+        get_random_fallback,
+    )
+
+    # 1. format_sparse_validation добавляет пометку и оставляет ровно 2 предложения
+    long_val = (
+        "Твои чувства и накопившаяся усталость вполне естественны. "
+        "В близких отношениях любая отстранённость ощущается особенно тяжело. "
+        "Понятно желание найти ясность, спокойствие и ощущение того, что старания замечают."
+    )
+    formatted = format_sparse_validation(long_val)
+    assert count_sentences(formatted) == 2
+    assert any(pfx[:20] in formatted for pfx in SPARSE_SHORTNESS_PREFIXES) or "Ты рассказал(а) совсем коротко" in formatted
+
+    # Если пометка уже есть — она сохраняется
+    already_sparse = "Ты рассказал(а) совсем коротко, поэтому скажу осторожно. Твои переживания естественны."
+    assert format_sparse_validation(already_sparse) == already_sparse
+
+    # 2. Валидация sparse=True карточки
+    card = PartnerResponse(
+        validation=formatted,
+        partner_perspective="За такой реакцией часто стоит то, что человек устал и растерян.",  # 1 предложение
+        blind_spot="Иногда короткая пауза помогает вернуть спокойный тон.",  # 1 предложение
+        action_scripts=[
+            ActionScriptItem(label="Шаг 1", text="Сделать паузу на 10 минут и передохнуть."),
+            ActionScriptItem(label="Шаг 2", text="Предлагаю попробовать новое правило: 15-минутный разговор без упрёков. Что скажешь?"),
+        ],
+    )
+    # При sparse=True должно проходить без замечаний
+    errs_sparse = validate_partner_card(card, sparse=True)
+    assert not errs_sparse, f"Sparse card should be valid: {errs_sparse}"
+
+    # Допускается 2 или 3 предложения в validation (при наличии пометки)
+    card.validation = f"{SPARSE_SHORTNESS_PREFIXES[0]}. Первое предложение о чувствах. Второе о поддержке."
+    assert not validate_partner_card(card, sparse=True)
+
+    # При отсутствии пометки о краткости sparse=True выдаёт ошибку
+    card.validation = "Твои чувства естественны. В близких отношениях важно понимание."
+    errs_no_note = validate_partner_card(card, sparse=True)
+    assert any("пометка о краткости" in e for e in errs_no_note)
+
+    # 3. get_random_fallback(..., sparse=True)
+    for _ in range(10):
+        val_fb = get_random_fallback("validation", sparse=True)
+        assert count_sentences(val_fb) == 2
+        assert any(pfx[:20] in val_fb for pfx in SPARSE_SHORTNESS_PREFIXES)
+
+        pp_fb = get_random_fallback("partner_perspective", sparse=True)
+        assert 1 <= count_sentences(pp_fb) <= 2
+
+        bs_fb = get_random_fallback("blind_spot", sparse=True)
+        assert count_sentences(bs_fb) == 1
+
+    # 4. Проверка сброса sparse при наличии followup (Патч 3.4 правило 6)
+    # Если has_followup=True, карточка трактуется как обычная (is_sparse=False)
+    # и без достаточной длины не проходит валидатор sparse=False
+    errs_non_sparse = validate_partner_card(card, sparse=False)
+    assert any("слишком короткое" in e for e in errs_non_sparse)
+
+
+def test_stage_3_11_no_tautology_in_partner_perspective():
+    """Проверка отсутствия тавтологии «Со стороны партнёра, у твоего партнёра...»."""
+    from ai_service import diversify_partner_perspectives, reformulate_perspective_opening
+
+    # Если текст уже начинается с «У твоего партнёра...» — не добавлять «партнёр»
+    text = "У твоего партнёра в этой ситуации тоже есть свои переживания."
+    reformed = reformulate_perspective_opening(text)
+    assert "Со стороны партнёра, у твоего партнёра" not in reformed
+    assert not reformed.startswith("Со стороны партнёра, у")
+
+    # Проверка работы diversify_partner_perspectives
+    p1 = PartnerResponse(
+        validation=FALLBACK_VALIDATION,
+        partner_perspective="Возможно, в такой момент партнёр закрывается от перегрузки.",
+        blind_spot=FALLBACK_BLIND_SPOT,
+        action_scripts=[ActionScriptItem(**s) for s in FALLBACK_ACTION_SCRIPTS],
+    )
+    p2 = PartnerResponse(
+        validation=FALLBACK_VALIDATION,
+        partner_perspective="У твоего партнёра в этой ситуации, скорее всего, тоже свои переживания.",
+        blind_spot=FALLBACK_BLIND_SPOT,
+        action_scripts=[ActionScriptItem(**s) for s in FALLBACK_ACTION_SCRIPTS],
+    )
+    diversify_partner_perspectives(p1, p2)
+    assert "Со стороны партнёра, у твоего партнёра" not in p2.partner_perspective
+    assert "Со стороны партнёра, у твоего партнёра" not in p1.partner_perspective
+
+
+def test_stage_3_11_spell_whitelist_inflections():
+    """Проверка распознавания падежных форм чек-ин* и тайм-аут* в белом списке орфографии."""
+    # Чек-ин во всех формах должен быть признан известным
+    for form in ["чек-ин", "чек-ина", "чек-ину", "чек-ином", "чек-ине", "чек-ины", "чек-инов", "чек-инам"]:
+        assert not is_unknown_word(form), f"Word {form} should be recognized as known"
+
+    # Тайм-аут во всех формах
+    for form in ["тайм-аут", "тайм-аута", "тайм-ауту", "тайм-аутом", "тайм-ауте", "тайм-ауты"]:
+        assert not is_unknown_word(form), f"Word {form} should be recognized as known"
+
+    # Несуществующее слово должно распознаваться как неизвестное
+    assert is_unknown_word("непонятнаяабракадабра123") is True
+    assert is_unknown_word("абырвалг") is True
+
+
+def test_stage_3_11_shared_forbidden_pronouns_and_roles():
+    """Проверка блокировки «кому-то», «один ... второй» и санитизации «бойкот» / «жизненно»."""
+    # 1. Блокировка падежей 'кто-то' в shared_summary
+    sh1 = SharedSummary(
+        situation_overview="У вас разный способ восстановиться: кому-то нужна тишина, кому-то — контакт.",
+        shared_advice="Ежедневно делайте 15-минутный разговор без упрёков.",
+        conversation_starter="Давайте сегодня сделаем 15-минутный разговор. Что скажете?",
+    )
+    errs1 = validate_shared_summary(sh1)
+    assert any("кому-то" in e for e in errs1), f"Expected 'кому-то' to be flagged: {errs1}"
+
+    # 2. Блокировка ролевой пары 'один ... второй'
+    sh2 = SharedSummary(
+        situation_overview="В ссоре один начинает говорить громче, второй закрывается и уходит.",
+        shared_advice="Ежедневно делайте 15-минутный разговор без упрёков.",
+        conversation_starter="Давайте сегодня сделаем 15-минутный разговор. Что скажете?",
+    )
+    errs2 = validate_shared_summary(sh2)
+    assert any("один" in e and "второй" in e for e in errs2), f"Expected 'один ... второй' to be flagged: {errs2}"
+
+    # 3. Санитизация наречий и бойкота
+    assert sanitize_minor_banned_words("это жизненно важно для нас") == "это по-человечески важно для нас"
+    assert sanitize_minor_banned_words("это жизненно.") == "это по-человечески."
+    assert sanitize_minor_banned_words("он объявил бойкот разговорам") == "он объявил молчание разговорам"
+    assert sanitize_minor_banned_words("прекратить бойкотирование") == "прекратить игнорирование"
+
+
+def test_stage_3_11_build_deterministic_ritual_script():
+    """Проверка формирования ритуального скрипта #2 при коротком ritual_phrase_we."""
+    from ai_service import build_deterministic_ritual_script
+    from schemas import AgreedRitual
+
+    # Короткое название ритуала 'разговор' без чисел
+    short_ritual = AgreedRitual(
+        name="разговор",
+        duration_minutes=20,
+        when="каждый вечер",
+        format="разговор",
+        ritual_phrase_we="разговор",
+        serves_partner_1_need="внимание",
+        serves_partner_2_need="спокойствие",
+    )
+    shared_advice = (
+        "Договоритесь о правиле: 48 часов на обдумывание крупных трат свыше 5000 рублей. "
+        "Раз в неделю проводите 20-минутный финансовый разговор."
+    )
+    script_text = build_deterministic_ritual_script(short_ritual, shared_advice)
+    # Скрипт должен подтянуть правило с числами из shared_advice
+    assert "Предлагаю попробовать новое правило:" in script_text
+    assert ("48 часов" in script_text or "20-минутный" in script_text)
+    assert script_text.endswith("Что скажешь?")
+
+
+
 
 

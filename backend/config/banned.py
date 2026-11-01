@@ -68,6 +68,16 @@ SHARED_FORBIDDEN_PATTERNS: List[str] = [
     r"один\s+из",
     r"одна\s+из",
     r"кто-то",
+    r"\bкого-то\b",
+    r"\bкому-то\b",
+    r"\bкем-то\b",
+    r"\bком-то\b",
+    # Ролевая пара один ... второй (Этап 3.11)
+    r"\bодин\b.*\bвторой\b",
+    r"\bодна\b.*\bвторая\b",
+    r"\bодного\b.*\bвторого\b",
+    r"\bодному\b.*\bвторому\b",
+    r"\bодним\b.*\bвторым\b",
     r"\bодного\b",
     r"\bдругого\b",
     r"\bодному\b",
@@ -137,6 +147,29 @@ def sanitize_minor_banned_words(text: str) -> str:
 
     text = re.sub(r"\bабсолютно\b", _replace_absolutno, text, flags=re.IGNORECASE)
     text = re.sub(r"\bжизненно\b", _replace_zhiznenno, text, flags=re.IGNORECASE)
+
+    # 1.1 Замена бойкот* -> молчание / игнорирование (Этап 3.11)
+    def _replace_boycott(m: re.Match) -> str:
+        word = m.group(0).lower()
+        is_cap = m.group(0)[0].isupper()
+        if "ирова" in word:
+            res = "игнорирование" if "ани" in word else "игнорировать"
+        elif "иру" in word:
+            res = "игнорирует" if "ет" in word else "игнорируют"
+        elif word in ("бойкотом", "бойкоте", "бойкоту", "бойкота", "бойкот"):
+            res_dict = {
+                "бойкот": "молчание",
+                "бойкота": "молчания",
+                "бойкоту": "молчанию",
+                "бойкотом": "молчанием",
+                "бойкоте": "молчании",
+            }
+            res = res_dict.get(word, "молчание")
+        else:
+            res = "молчание"
+        return res.capitalize() if is_cap else res
+
+    text = re.sub(r"\bбойкот[а-яё]*\b", _replace_boycott, text, flags=re.IGNORECASE)
 
     # 2. Вырезание 'как договаривались', 'как мы договаривались' вместе с запятыми
     text = re.sub(r",\s*как\s+(?:мы\s+)?договаривалис[ья]\s*,", " ", text, flags=re.IGNORECASE)

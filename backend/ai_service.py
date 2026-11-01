@@ -28,7 +28,7 @@ from typing import Dict, Any, List, Optional, Tuple, Union
 from config import settings
 from config.hotlines import get_hotlines_text
 from config.safety_messages import get_high_risk_message, get_elevated_risk_message
-from config.fallbacks import get_random_fallback
+from config.fallbacks import get_random_fallback, SPARSE_SHORTNESS_PREFIXES
 import crypto
 from repo import get_repo
 from leak_guard import (
@@ -397,22 +397,117 @@ async def call_leak_checker(
 # Лестница фоллбэков для карточек и общего итога (Этап 3.2 + 3.5)
 # ==============================================================================
 
+def format_sparse_validation(text: str, default_note: Optional[str] = None) -> str:
+    """
+    Приводит validation для sparse=True к стандарту Патча 3.4 (п. 6):
+    Детерминированно добавляет пометку о краткости (если её там ещё нет)
+    и оставляет ровно 2 предложения (первое — пометка о краткости,
+    второе — ёмкая мысль из сгенерированного validation).
+    """
+    if not text:
+        return default_note or "Ты рассказал(а) совсем коротко, поэтому скажу осторожно. Твои чувства и накопившаяся усталость от недопонимания вполне естественны."
+
+    note = default_note or "Ты рассказал(а) совсем коротко, поэтому скажу осторожно."
+    sents = [s.strip() for s in re.split(r"(?<=[.!?…])\s+", text.strip()) if s.strip()]
+
+    starts_with_note = False
+    for pfx in SPARSE_SHORTNESS_PREFIXES:
+        if sents and re.search(re.escape(pfx[:25]), sents[0], flags=re.IGNORECASE):
+            starts_with_note = True
+            break
+    if not starts_with_note:
+        for pat in [
+            r"ты\s+рассказал[ао]?\s+совсем\s+коротко",
+            r"ты\s+описал[ао]?\s+ситуаци\w*\s+совсем\s+коротко",
+            r"тво[её]\s+сообщени\w*\s+совсем\s+коротк",
+            r"ты\s+поделил(?:ся|ась|ось)\s+очень\s+кратко",
+            r"скажу\s+осторожно",
+        ]:
+            if sents and re.search(pat, sents[0], flags=re.IGNORECASE):
+                starts_with_note = True
+                break
+
+    if starts_with_note:
+        first_sent = sents[0]
+        second_sent = sents[1] if len(sents) > 1 else "Твои чувства и накопившаяся усталость от недопонимания вполне естественны."
+    else:
+        first_sent = note
+        second_sent = sents[0] if sents else "Твои чувства и накопившаяся усталость от недопонимания вполне естественны."
+
+    if not re.search(r"[.!?…]$", first_sent):
+        first_sent += "."
+    if not re.search(r"[.!?…]$", second_sent):
+        second_sent += "."
+
+    return f"{first_sent} {second_sent}"
+
+
+def build_deterministic_ritual_script(agreed_ritual: Optional[Any], shared_advice: str) -> str:
+    """
+    Формирует содержательный скрипт действия #2 для ритуала.
+    Если ritual_phrase_we короче 25 символов или не содержит цифр/длительности из shared_advice,
+    извлекает ключевое правило с длительностью из shared_advice (Этап 3.10 / 3.11).
+    """
+    rit_phrase = ""
+    if agreed_ritual:
+        rit_phrase = (getattr(agreed_ritual, "ritual_phrase_we", None) or getattr(agreed_ritual, "format", None) or "").strip()
+
+    advice_durs = extract_durations(shared_advice)
+    advice_numbers = re.findall(r"\b\d+\b", shared_advice)
+
+    is_good_phrase = len(rit_phrase) >= 25
+    if is_good_phrase and (advice_durs or advice_numbers):
+        phrase_numbers = set(re.findall(r"\b\d+\b", rit_phrase))
+        has_number_match = bool(phrase_numbers & (set(advice_numbers) | set(re.findall(r"\b\d+\b", " ".join(advice_durs)))))
+        if not has_number_match:
+            is_good_phrase = False
+
+    if not is_good_phrase and shared_advice:
+        sentences = [s.strip() for s in re.split(r"(?<=[.!?…])\s+", shared_advice) if s.strip()]
+        candidate_sent = ""
+        for s in sentences:
+            if any(num in s for num in advice_numbers) or extract_durations(s):
+                candidate_sent = s
+                break
+        if not candidate_sent and sentences:
+            candidate_sent = sentences[0]
+
+        if candidate_sent:
+            cleaned_rule = re.sub(r"^(?:договоритесь\s+о\s+правиле:?|выберите\s+правило:?|попробуйте\s+внедрить:?)\s*", "", candidate_sent, flags=re.IGNORECASE)
+            cleaned_rule = re.sub(r"^[Дд]оговоритесь\s+о\s+правиле:?\s*", "", cleaned_rule)
+            cleaned_rule = cleaned_rule.rstrip(".!?…")
+            if cleaned_rule:
+                cleaned_rule = cleaned_rule[0].lower() + cleaned_rule[1:]
+                return f"Предлагаю попробовать новое правило: {cleaned_rule}. Что скажешь?"
+
+    if not rit_phrase or len(rit_phrase) < 25:
+        rit_phrase = "делать 15-минутную паузу и обсуждать ситуацию без взаимных упрёков"
+
+    rit_phrase = rit_phrase[0].lower() + rit_phrase[1:] if rit_phrase else rit_phrase
+    return f"Предлагаю попробовать новое правило: {rit_phrase}. Что скажешь?"
+
+
 def reformulate_perspective_opening(text: str) -> str:
     """
     Переформулирует зачин partner_perspective, устраняя штампы
     ('Возможно', 'Скорее всего', 'Бывает', 'Вероятно', 'Похоже')
-    и обеспечивая разнообразие начал между партнёрами (Этап 3.4 / 3.9).
+    и обеспечивая разнообразие начал между партнёрами (Этап 3.4 / 3.9 / 3.11).
+    Использует зачины БЕЗ слова «партнёр», исключая тавтологии.
     """
     if not text:
         return text
     cleaned = text.strip()
 
+    # НЕ применять модификацию, если поле уже начинается с «У твоего партнёра»
+    if re.search(r"^у\s+(?:твоего\s+)?партн[её]ра\b", cleaned, flags=re.IGNORECASE):
+        return cleaned
+
     patterns = [
         (r"^(?:возможно|вероятно),\s*", "В таких ситуациях "),
-        (r"^скорее всего,\s*", "Нередко "),
-        (r"^бывает,\s*(?:что\s*)?", "В подобных случаях "),
-        (r"^похоже,\s*", "Со стороны партнёра "),
-        (r"^наверное,\s*", "В моменты напряжения "),
+        (r"^скорее всего,\s*", "Нередко в такие моменты "),
+        (r"^бывает,\s*(?:что\s*)?", "За такой реакцией часто стоит то, что "),
+        (r"^похоже,\s*", "В такой ситуации "),
+        (r"^наверное,\s*", "Нередко в такие моменты "),
     ]
     for pat, repl in patterns:
         if re.search(pat, cleaned, flags=re.IGNORECASE):
@@ -421,7 +516,7 @@ def reformulate_perspective_opening(text: str) -> str:
     words = re.findall(r"\b\w+\b", cleaned)
     if words:
         first_w = words[0]
-        return re.sub(rf"^{re.escape(first_w)}[,\s]+", f"Со стороны партнёра, {first_w.lower()} ", cleaned, count=1, flags=re.IGNORECASE)
+        return re.sub(rf"^{re.escape(first_w)}[,\s]+", f"В такой ситуации, {first_w.lower()} ", cleaned, count=1, flags=re.IGNORECASE)
 
     return cleaned
 
@@ -430,13 +525,17 @@ def diversify_partner_perspectives(p1_card: Optional[PartnerResponse], p2_card: 
     """
     Проверяет симметрию зачинов partner_perspective партнёра 1 и 2.
     Если они начинаются с одного и того же первого слова или оба начинаются со слова
-    из списка смягчителей, переформулирует начало второго (Этап 3.4 / 3.9).
+    из списка смягчителей, переформулирует начало второго (Этап 3.4 / 3.9 / 3.11).
     """
     if not p1_card or not p2_card:
         return
     pp1 = (p1_card.partner_perspective or "").strip()
     pp2 = (p2_card.partner_perspective or "").strip()
     if not pp1 or not pp2:
+        return
+
+    # Если второе поле уже начинается с «У твоего партнёра», модификацию не применяем
+    if re.search(r"^у\s+(?:твоего\s+)?партн[её]ра\b", pp2, flags=re.IGNORECASE):
         return
 
     words1 = re.findall(r"\b\w+\b", pp1.lower())
@@ -465,6 +564,7 @@ async def generate_partner_card_with_ladder(
     agreed_ritual: Optional[AgreedRitual] = None,
     risk_elevated: bool = False,
     sparse: bool = False,
+    has_followup: bool = False,
     partner_tag: str = "partner_1",
     fallback_records: Optional[List[Dict[str, str]]] = None,
     guidance: Optional[str] = None,
@@ -479,7 +579,7 @@ async def generate_partner_card_with_ladder(
     (в) Статический текст из config/fallbacks.py строго для проблемных полей.
     """
     p = _resolve_provider(provider_or_client or client, role="card_writer", model=model)
-    effective_sparse = sparse or getattr(my_analysis, "sparse", False)
+    effective_sparse = False if has_followup else (sparse or getattr(my_analysis, "sparse", False))
     if my_analysis is None:
         my_analysis = PartnerAnalysis(
             topic="", key_facts=[], feelings=[], unmet_needs=[], own_contribution="",
@@ -505,6 +605,8 @@ async def generate_partner_card_with_ladder(
     is_blocked = meta.get("blocked", False)
     if card is not None and not is_blocked:
         card = sanitize_card_minor_banned_words(card)
+        if effective_sparse:
+            card.validation = format_sparse_validation(card.validation)
         errors = validate_partner_card(card, is_high_risk=False, sparse=effective_sparse)
     elif card is None or is_blocked:
         errors = ["blocked: " + str(meta.get("error", "provider_refusal"))]
@@ -535,6 +637,8 @@ async def generate_partner_card_with_ladder(
         card, meta = await call_card_writer(p, retry_contents, model=model, tracker=tracker)
         if card is not None and not meta.get("blocked"):
             card = sanitize_card_minor_banned_words(card)
+            if effective_sparse:
+                card.validation = format_sparse_validation(card.validation)
             errors = validate_partner_card(card, is_high_risk=False, sparse=effective_sparse)
         elif card is None or meta.get("blocked"):
             errors = ["blocked: " + str(meta.get("error", "provider_refusal"))]
@@ -562,6 +666,8 @@ async def generate_partner_card_with_ladder(
         card, meta = await call_card_writer(p, safe_contents, model=model, tracker=tracker)
         if card is not None and not meta.get("blocked"):
             card = sanitize_card_minor_banned_words(card)
+            if effective_sparse:
+                card.validation = format_sparse_validation(card.validation)
             errors = validate_partner_card(card, is_high_risk=False, sparse=effective_sparse)
         elif card is None or meta.get("blocked"):
             errors = ["blocked: " + str(meta.get("error", "provider_refusal"))]
@@ -571,9 +677,9 @@ async def generate_partner_card_with_ladder(
     # Если card так и не сформировалась (например при блокировке) — создаем каркас
     if card is None:
         card = PartnerResponse(
-            validation=get_random_fallback("validation"),
-            partner_perspective=get_random_fallback("partner_perspective"),
-            blind_spot=get_random_fallback("blind_spot"),
+            validation=get_random_fallback("validation", sparse=effective_sparse),
+            partner_perspective=get_random_fallback("partner_perspective", sparse=effective_sparse),
+            blind_spot=get_random_fallback("blind_spot", sparse=effective_sparse),
             action_scripts=[ActionScriptItem(**s) for s in get_random_fallback("action_scripts")],
             safety_note="",
             ritual_unfit=False,
@@ -588,20 +694,20 @@ async def generate_partner_card_with_ladder(
         for err in errors:
             err_lower = err.lower()
             if "validation" in err_lower or "blocked" in err_lower:
-                card.validation = get_random_fallback("validation")
+                card.validation = get_random_fallback("validation", sparse=effective_sparse)
                 reason = "sparse" if effective_sparse else "validator"
                 logger.info("Fallback applied: field=%s.validation, reason=%s", partner_tag, reason)
                 if fallback_records is not None:
                     fallback_records.append({"field": f"{partner_tag}.validation", "reason": reason})
 
             if "partner_perspective" in err_lower or "blocked" in err_lower:
-                card.partner_perspective = get_random_fallback("partner_perspective")
+                card.partner_perspective = get_random_fallback("partner_perspective", sparse=effective_sparse)
                 logger.info("Fallback applied: field=%s.partner_perspective, reason=validator", partner_tag)
                 if fallback_records is not None:
                     fallback_records.append({"field": f"{partner_tag}.partner_perspective", "reason": "validator"})
 
             if "blind_spot" in err_lower or "blocked" in err_lower:
-                card.blind_spot = get_random_fallback("blind_spot")
+                card.blind_spot = get_random_fallback("blind_spot", sparse=effective_sparse)
                 logger.info("Fallback applied: field=%s.blind_spot, reason=validator", partner_tag)
                 if fallback_records is not None:
                     fallback_records.append({"field": f"{partner_tag}.blind_spot", "reason": "validator"})
@@ -979,6 +1085,8 @@ async def analyze_session(session_id: str) -> None:
         # ----------------------------------------------------------------------
         else:
             is_elevated = (analyzer_res.risk_level == "elevated")
+            has_followup_p1 = bool(p1_input.get("has_followup") or p1_input.get("has_clarification"))
+            has_followup_p2 = bool(p2_input.get("has_followup") or p2_input.get("has_clarification"))
 
             # Шаг B1: Карточка партнера 1 по Лестнице фоллбэков
             p1_card = await generate_partner_card_with_ladder(
@@ -990,6 +1098,7 @@ async def analyze_session(session_id: str) -> None:
                 agreed_ritual=analyzer_res.shared.agreed_ritual,
                 risk_elevated=is_elevated,
                 sparse=analyzer_res.partner_1.sparse,
+                has_followup=has_followup_p1,
                 partner_tag="partner_1",
                 fallback_records=fallback_records,
                 tracker=tracker,
@@ -1005,6 +1114,7 @@ async def analyze_session(session_id: str) -> None:
                 agreed_ritual=analyzer_res.shared.agreed_ritual,
                 risk_elevated=is_elevated,
                 sparse=analyzer_res.partner_2.sparse,
+                has_followup=has_followup_p2,
                 partner_tag="partner_2",
                 fallback_records=fallback_records,
                 tracker=tracker,
@@ -1078,12 +1188,10 @@ async def analyze_session(session_id: str) -> None:
                 )
                 if post_retry_errs:
                     logger.warning("Ritual duration mismatch persisted after retry: %s. Applying deterministic overwrite.", post_retry_errs)
-                    rit_phrase = ""
-                    if analyzer_res.shared and analyzer_res.shared.agreed_ritual:
-                        rit_phrase = analyzer_res.shared.agreed_ritual.ritual_phrase_we or analyzer_res.shared.agreed_ritual.format or ""
-                    if not rit_phrase:
-                        rit_phrase = "делать 15-минутную паузу и обсуждать ситуацию без взаимных упрёков"
-                    det_script_text = f"Предлагаю попробовать новое правило: {rit_phrase}. Что скажешь?"
+                    det_script_text = build_deterministic_ritual_script(
+                        analyzer_res.shared.agreed_ritual if analyzer_res.shared else None,
+                        shared_card.shared_advice or "",
+                    )
                     if len(p1_card.action_scripts) >= 2:
                         p1_card.action_scripts[1].text = det_script_text
                     if len(p2_card.action_scripts) >= 2:

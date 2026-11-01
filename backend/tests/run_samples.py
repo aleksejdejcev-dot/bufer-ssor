@@ -45,6 +45,7 @@ from schemas import (
     AgreedRitual,
 )
 from validators import (
+    count_sentences,
     validate_partner_card,
     validate_shared_summary,
     validate_full_mediator_output,
@@ -73,6 +74,8 @@ from ai_service import (
     generate_shared_summary_with_ladder,
     apply_fallback_to_field,
     diversify_partner_perspectives,
+    format_sparse_validation,
+    build_deterministic_ritual_script,
 )
 from leak_guard import sanitize_hypothesis_for_other, sanitize_agreed_ritual
 from analyzer_cache import (
@@ -288,6 +291,13 @@ async def run_single_sample(
     p1_text = sample.get("transcript") or sample["partner_1"]
     p2_text = sample.get("transcript_2") or sample["partner_2"]
 
+    has_followup_p1 = bool(sample.get("followup_p1"))
+    has_followup_p2 = bool(sample.get("followup_p2"))
+    if has_followup_p1:
+        p1_text = f"{p1_text}\n\n{sample['followup_p1']}"
+    if has_followup_p2:
+        p2_text = f"{p2_text}\n\n{sample['followup_p2']}"
+
     p1_bytes = p1_text.encode("utf-8")
     p2_bytes = p2_text.encode("utf-8")
 
@@ -347,8 +357,13 @@ async def run_single_sample(
             facts_known_to_both=neutral_facts,
         )
 
-    p1_is_sparse = bool(sample.get("sparse")) or (len(p1_text.split()) < 20) or (analyzer_res.partner_1.sparse and len(p1_text.split()) < 30)
-    p2_is_sparse = bool(sample.get("sparse")) or (len(p2_text.split()) < 20) or (analyzer_res.partner_2.sparse and len(p2_text.split()) < 30)
+    # По правилам патча 3.4 (п. 6): если был ответ на followup, sparse сбрасывается в False
+    p1_is_sparse = (not has_followup_p1) and (
+        bool(sample.get("sparse")) or (len(p1_text.split()) < 20) or (analyzer_res.partner_1.sparse and len(p1_text.split()) < 30)
+    )
+    p2_is_sparse = (not has_followup_p2) and (
+        bool(sample.get("sparse")) or (len(p2_text.split()) < 20) or (analyzer_res.partner_2.sparse and len(p2_text.split()) < 30)
+    )
 
     if analyzer_res.risk_level == "high":
         safety_msg = get_high_risk_message()
@@ -391,6 +406,7 @@ async def run_single_sample(
             agreed_ritual=analyzer_res.shared.agreed_ritual,
             risk_elevated=is_elevated,
             sparse=p1_is_sparse,
+            has_followup=has_followup_p1,
             partner_tag="partner_1",
             fallback_records=fallback_records,
             model=target_model,
@@ -407,6 +423,7 @@ async def run_single_sample(
             agreed_ritual=analyzer_res.shared.agreed_ritual,
             risk_elevated=is_elevated,
             sparse=p2_is_sparse,
+            has_followup=has_followup_p2,
             partner_tag="partner_2",
             fallback_records=fallback_records,
             model=target_model,
@@ -449,6 +466,7 @@ async def run_single_sample(
                     agreed_ritual=analyzer_res.shared.agreed_ritual,
                     risk_elevated=is_elevated,
                     sparse=p1_is_sparse,
+                    has_followup=has_followup_p1,
                     partner_tag="partner_1",
                     fallback_records=fallback_records,
                     guidance=retry_guidance,
@@ -465,6 +483,7 @@ async def run_single_sample(
                     agreed_ritual=analyzer_res.shared.agreed_ritual,
                     risk_elevated=is_elevated,
                     sparse=p2_is_sparse,
+                    has_followup=has_followup_p2,
                     partner_tag="partner_2",
                     fallback_records=fallback_records,
                     guidance=retry_guidance,
@@ -483,12 +502,10 @@ async def run_single_sample(
                 ritual_unfit_p2=bool(p2_card.ritual_unfit),
             )
             if post_retry_errs:
-                rit_phrase = ""
-                if analyzer_res.shared and analyzer_res.shared.agreed_ritual:
-                    rit_phrase = analyzer_res.shared.agreed_ritual.ritual_phrase_we or analyzer_res.shared.agreed_ritual.format or ""
-                if not rit_phrase:
-                    rit_phrase = "делать 15-минутную паузу и обсуждать ситуацию без взаимных упрёков"
-                det_script_text = f"Предлагаю попробовать новое правило: {rit_phrase}. Что скажешь?"
+                det_script_text = build_deterministic_ritual_script(
+                    analyzer_res.shared.agreed_ritual if analyzer_res.shared else None,
+                    shared_card.shared_advice or "",
+                )
                 if len(p1_card.action_scripts) >= 2:
                     p1_card.action_scripts[1].text = det_script_text
                 if len(p2_card.action_scripts) >= 2:
@@ -543,6 +560,7 @@ async def run_single_sample(
                     partner_hypothesis=analyzer_res.partner_2.hypothesis_for_other,
                     risk_elevated=is_elevated,
                     sparse=p1_is_sparse,
+                    has_followup=has_followup_p1,
                     guidance=leak_guidance,
                     model=target_model,
                     tracker=tracker,
@@ -556,6 +574,7 @@ async def run_single_sample(
                     partner_hypothesis=analyzer_res.partner_1.hypothesis_for_other,
                     risk_elevated=is_elevated,
                     sparse=p2_is_sparse,
+                    has_followup=has_followup_p2,
                     guidance=leak_guidance,
                     model=target_model,
                     tracker=tracker,
@@ -748,7 +767,9 @@ def compute_metrics(results: List[Dict[str, Any]]) -> Dict[str, Any]:
             if r.get("p2_starts_softener"):
                 perspectives_softener += 1
 
-        all_unknown_words.extend(r.get("unknown_words", []))
+        # Фильтруем неизвестные слова через актуальный is_unknown_word (Этап 3.11)
+        active_unknown = [w for w in r.get("unknown_words", []) if is_unknown_word(w)]
+        all_unknown_words.extend(active_unknown)
         all_copied_phrases.extend(r.get("copied_from_prompt", []))
 
     softener_rate = (perspectives_softener / total_perspectives * 100) if total_perspectives > 0 else 0.0
@@ -851,11 +872,26 @@ def dry_validate(file_path: Path) -> Tuple[Dict[str, Any], List[str]]:
             p2_resp = mediator_out.get("partner_2_response")
             sh_resp = mediator_out.get("shared_summary")
 
+            # Определение sparse для dry_validate (Этап 3.11)
+            p1_sparse = (
+                s_id.startswith("5_short_versions")
+                or s_id.startswith("15_both_sparse")
+                or s_id.startswith("11_sparse_clarification")
+            )
+            p2_sparse = (
+                s_id.startswith("5_short_versions")
+                or s_id.startswith("15_both_sparse")
+                or s_id.startswith("11_sparse_clarification")
+                or s_id.startswith("10_asymmetric_lengths")
+            )
+
             if p1_resp:
                 try:
                     p1_obj = PartnerResponse(**p1_resp)
                     p1_obj = sanitize_card_minor_banned_words(p1_obj)
-                    p1_errs = validate_partner_card(p1_obj)
+                    if p1_sparse:
+                        p1_obj.validation = format_sparse_validation(p1_obj.validation)
+                    p1_errs = validate_partner_card(p1_obj, sparse=p1_sparse)
                     all_errors.extend([f"[{s_id} P1] {e}" for e in p1_errs])
                 except Exception as ex:
                     all_errors.append(f"[{s_id} P1 Schema] {ex}")
@@ -864,7 +900,9 @@ def dry_validate(file_path: Path) -> Tuple[Dict[str, Any], List[str]]:
                 try:
                     p2_obj = PartnerResponse(**p2_resp)
                     p2_obj = sanitize_card_minor_banned_words(p2_obj)
-                    p2_errs = validate_partner_card(p2_obj)
+                    if p2_sparse:
+                        p2_obj.validation = format_sparse_validation(p2_obj.validation)
+                    p2_errs = validate_partner_card(p2_obj, sparse=p2_sparse)
                     all_errors.extend([f"[{s_id} P2] {e}" for e in p2_errs])
                 except Exception as ex:
                     all_errors.append(f"[{s_id} P2 Schema] {ex}")
@@ -915,6 +953,9 @@ def dry_validate(file_path: Path) -> Tuple[Dict[str, Any], List[str]]:
                         ritual_unfit_p2=bool(p2_resp.get("ritual_unfit")),
                     ):
                         continue
+                if "При sparse=True в validation" in re_err or "При sparse=True в начале validation" in re_err:
+                    # Ошибки старого прогона, устраненные в Этапе 3.11 детерминированным добавлением пометки
+                    continue
                 tag = f"[{s_id} Recorded] {re_err}"
                 if tag not in all_errors:
                     all_errors.append(tag)

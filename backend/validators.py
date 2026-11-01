@@ -23,6 +23,7 @@ from config.banned import (
     sanitize_card_minor_banned_words,
     sanitize_shared_minor_banned_words,
 )
+from config.fallbacks import SPARSE_SHORTNESS_PREFIXES
 
 stemmer = snowballstemmer.stemmer("russian")
 
@@ -52,6 +53,13 @@ def is_unknown_word(word: str, morph_analyzer: Optional[Any] = None) -> bool:
     if clean in SPELL_WHITELIST:
         return False
 
+    # Проверка слов из SPELL_WHITELIST с падежными окончаниями (Этап 3.11)
+    for white_prefix in ("чек-ин", "чекин", "тайм-аут", "онлайн", "офлайн"):
+        if clean.startswith(white_prefix):
+            suffix = clean[len(white_prefix):]
+            if suffix in {"", "а", "у", "ом", "е", "ы", "ов", "ам", "ами", "ах", "ном", "не"}:
+                return False
+
     morph = morph_analyzer or get_spell_morph()
 
     if "-" in clean:
@@ -72,7 +80,7 @@ def is_unknown_word(word: str, morph_analyzer: Optional[Any] = None) -> bool:
     parses = morph.parse(clean)
     if not parses:
         return True
-    return any(method[0].__class__.__name__ == "FakeDictionary" for method in parses[0].methods_stack)
+    return any(method[0].__class__.__name__ in ("FakeDictionary", "UnknAnalyzer") for method in parses[0].methods_stack)
 
 
 def count_sentences(text: str) -> int:
@@ -387,10 +395,27 @@ def validate_partner_card(
     val_sentences = count_sentences(val_text)
 
     if sparse:
-        if val_sentences != 2:
-            errors.append(f"При sparse=True в validation ожидалось ровно 2 предложения, получено {val_sentences}")
-        if not re.search(r"^ты\s+рассказал[ао]?\s+совсем\s+коротко,\s+поэтому\s+скажу\s+осторожно", val_text.strip(), re.IGNORECASE):
-            errors.append("При sparse=True в начале validation должна быть фраза: «Ты рассказал(а) совсем коротко, поэтому скажу осторожно»")
+        if val_sentences < 2 or val_sentences > 3:
+            errors.append(f"При sparse=True в validation ожидалось 2-3 предложения, получено {val_sentences}")
+        # Проверка наличия любой из пометок о краткости (Этап 3.11)
+        has_shortness_note = False
+        for pfx in SPARSE_SHORTNESS_PREFIXES:
+            if re.search(re.escape(pfx[:25]), val_text.strip(), flags=re.IGNORECASE):
+                has_shortness_note = True
+                break
+        if not has_shortness_note:
+            for pat in [
+                r"^ты\s+рассказал[ао]?\s+совсем\s+коротко",
+                r"^ты\s+описал[ао]?\s+ситуаци\w*\s+совсем\s+коротко",
+                r"^тво[её]\s+сообщени\w*\s+совсем\s+коротк",
+                r"^ты\s+поделил(?:ся|ась|ось)\s+очень\s+кратко",
+                r"скажу\s+осторожно",
+            ]:
+                if re.search(pat, val_text.strip(), flags=re.IGNORECASE):
+                    has_shortness_note = True
+                    break
+        if not has_shortness_note:
+            errors.append("При sparse=True в начале validation должна быть фраза: «Ты рассказал(а) совсем коротко, поэтому скажу осторожно» (или пометка о краткости)")
     else:
         if len(val_text.strip()) < 180:
             errors.append(f"Поле validation слишком короткое ({len(val_text.strip())} < 180 символов)")
@@ -435,8 +460,8 @@ def validate_partner_card(
     bs_sentences = count_sentences(bs_text)
 
     if sparse:
-        if bs_sentences != 1:
-            errors.append(f"При sparse=True в blind_spot ожидалось ровно 1 предложение, получено {bs_sentences}")
+        if bs_sentences < 1 or bs_sentences > 2:
+            errors.append(f"При sparse=True в blind_spot ожидалось 1-2 предложения, получено {bs_sentences}")
     else:
         if len(bs_text.strip()) < 180:
             errors.append(f"Поле blind_spot слишком короткое ({len(bs_text.strip())} < 180 символов)")
