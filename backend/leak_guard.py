@@ -5,7 +5,7 @@
 """
 
 import re
-from typing import Set, List, Optional
+from typing import Set, List, Optional, Any
 import pymorphy3
 
 _morph = pymorphy3.MorphAnalyzer()
@@ -103,3 +103,97 @@ def check_shared_lemma_leaks(
     forbidden = (all_private_facts or []) + (all_secrets or [])
     allowed = facts_known_to_both or []
     return check_lemma_overlap(shared_text, forbidden, allowed)
+
+
+def filter_text_leaks(
+    text: str,
+    forbidden_texts: List[str],
+    allowed_texts: List[str],
+) -> str:
+    """
+    Удаляет из text слова, чьи леммы входят в forbidden_texts
+    и отсутствуют в allowed_texts (Этап 3.10).
+    """
+    if not text:
+        return text
+
+    forbidden_combined = " ".join(t for t in forbidden_texts if t)
+    forbidden_lemmas = extract_content_lemmas(forbidden_combined)
+
+    allowed_combined = " ".join(t for t in allowed_texts if t)
+    allowed_lemmas = extract_content_lemmas(allowed_combined)
+
+    strictly_forbidden = forbidden_lemmas - allowed_lemmas
+    if not strictly_forbidden:
+        return text
+
+    words = re.findall(r"[а-яёa-z0-9]+(?:-[а-яёa-z0-9]+)*", text, flags=re.IGNORECASE)
+    cleaned = text
+    for w in words:
+        if len(w) < 3:
+            continue
+        p = _morph.parse(w.lower())[0]
+        if p.normal_form in strictly_forbidden:
+            cleaned = re.sub(rf"\b{re.escape(w)}\b", "", cleaned, flags=re.IGNORECASE)
+
+    cleaned = re.sub(r"\s{2,}", " ", cleaned)
+    cleaned = re.sub(r"\s+([,.?!;:])", r"\1", cleaned)
+    return cleaned.strip()
+
+
+def sanitize_hypothesis_for_other(
+    hypothesis: Any,
+    other_private_facts: List[str],
+    other_secrets: List[str],
+    facts_known_to_both: Optional[List[str]] = None,
+) -> Any:
+    """
+    Очищает hypothesis_for_other от фактов и секретов другого партнера (Этап 3.10).
+    Предотвращает утечки через входные данные Analyzer -> CardWriter.
+    """
+    if not hypothesis:
+        return hypothesis
+
+    forbidden = (other_private_facts or []) + (other_secrets or [])
+    allowed = facts_known_to_both or []
+
+    if getattr(hypothesis, "likely_feelings", None):
+        cleaned_feelings = []
+        for f in hypothesis.likely_feelings:
+            c = filter_text_leaks(f, forbidden, allowed)
+            if c:
+                cleaned_feelings.append(c)
+        hypothesis.likely_feelings = cleaned_feelings
+
+    if getattr(hypothesis, "likely_needs", None):
+        cleaned_needs = []
+        for n in hypothesis.likely_needs:
+            c = filter_text_leaks(n, forbidden, allowed)
+            if c:
+                cleaned_needs.append(c)
+        hypothesis.likely_needs = cleaned_needs
+
+    return hypothesis
+
+
+def sanitize_agreed_ritual(
+    agreed_ritual: Any,
+    all_private_facts: List[str],
+    all_secrets: List[str],
+    facts_known_to_both: Optional[List[str]] = None,
+) -> Any:
+    """
+    Очищает согласованный ритуал от приватных фактов обоих партнеров (Этап 3.10).
+    """
+    if not agreed_ritual:
+        return agreed_ritual
+
+    forbidden = (all_private_facts or []) + (all_secrets or [])
+    allowed = facts_known_to_both or []
+
+    for attr in ("ritual_phrase_we", "name", "format", "when", "serves_partner_1_need", "serves_partner_2_need"):
+        val = getattr(agreed_ritual, attr, None)
+        if val and isinstance(val, str):
+            setattr(agreed_ritual, attr, filter_text_leaks(val, forbidden, allowed))
+
+    return agreed_ritual

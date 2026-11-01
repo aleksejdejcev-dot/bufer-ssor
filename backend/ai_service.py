@@ -31,7 +31,12 @@ from config.safety_messages import get_high_risk_message, get_elevated_risk_mess
 from config.fallbacks import get_random_fallback
 import crypto
 from repo import get_repo
-from leak_guard import check_card_lemma_leaks, check_shared_lemma_leaks
+from leak_guard import (
+    check_card_lemma_leaks,
+    check_shared_lemma_leaks,
+    sanitize_hypothesis_for_other,
+    sanitize_agreed_ritual,
+)
 from schemas import (
     AnalyzerOutput,
     PartnerAnalysis,
@@ -53,6 +58,9 @@ from validators import (
     validate_ritual_consistency,
     extract_durations,
     align_action_scripts_with_ritual,
+    sanitize_minor_banned_words,
+    sanitize_card_minor_banned_words,
+    sanitize_shared_minor_banned_words,
 )
 from providers import get_provider, get_model_for_role
 from providers.base import LLMProvider
@@ -389,6 +397,65 @@ async def call_leak_checker(
 # Лестница фоллбэков для карточек и общего итога (Этап 3.2 + 3.5)
 # ==============================================================================
 
+def reformulate_perspective_opening(text: str) -> str:
+    """
+    Переформулирует зачин partner_perspective, устраняя штампы
+    ('Возможно', 'Скорее всего', 'Бывает', 'Вероятно', 'Похоже')
+    и обеспечивая разнообразие начал между партнёрами (Этап 3.4 / 3.9).
+    """
+    if not text:
+        return text
+    cleaned = text.strip()
+
+    patterns = [
+        (r"^(?:возможно|вероятно),\s*", "В таких ситуациях "),
+        (r"^скорее всего,\s*", "Нередко "),
+        (r"^бывает,\s*(?:что\s*)?", "В подобных случаях "),
+        (r"^похоже,\s*", "Со стороны партнёра "),
+        (r"^наверное,\s*", "В моменты напряжения "),
+    ]
+    for pat, repl in patterns:
+        if re.search(pat, cleaned, flags=re.IGNORECASE):
+            return re.sub(pat, repl, cleaned, count=1, flags=re.IGNORECASE)
+
+    words = re.findall(r"\b\w+\b", cleaned)
+    if words:
+        first_w = words[0]
+        return re.sub(rf"^{re.escape(first_w)}[,\s]+", f"Со стороны партнёра, {first_w.lower()} ", cleaned, count=1, flags=re.IGNORECASE)
+
+    return cleaned
+
+
+def diversify_partner_perspectives(p1_card: Optional[PartnerResponse], p2_card: Optional[PartnerResponse]) -> None:
+    """
+    Проверяет симметрию зачинов partner_perspective партнёра 1 и 2.
+    Если они начинаются с одного и того же первого слова или оба начинаются со слова
+    из списка смягчителей, переформулирует начало второго (Этап 3.4 / 3.9).
+    """
+    if not p1_card or not p2_card:
+        return
+    pp1 = (p1_card.partner_perspective or "").strip()
+    pp2 = (p2_card.partner_perspective or "").strip()
+    if not pp1 or not pp2:
+        return
+
+    words1 = re.findall(r"\b\w+\b", pp1.lower())
+    words2 = re.findall(r"\b\w+\b", pp2.lower())
+    if not words1 or not words2:
+        return
+
+    w1 = words1[0]
+    w2 = words2[0]
+
+    softeners = {"возможно", "скорее", "бывает", "вероятно", "похоже", "наверное"}
+    same_start = (w1 == w2)
+    both_softeners = (w1 in softeners and w2 in softeners)
+
+    if same_start or both_softeners:
+        logger.info("Diversifying partner_perspective openings: P1 starts with '%s', P2 with '%s'", w1, w2)
+        new_pp2 = reformulate_perspective_opening(pp2)
+        p2_card.partner_perspective = new_pp2
+
 async def generate_partner_card_with_ladder(
     provider_or_client: Optional[Union[LLMProvider, Any]] = None,
     my_kind: str = "text",
@@ -436,7 +503,10 @@ async def generate_partner_card_with_ladder(
     card, meta = await call_card_writer(p, contents, model=model, tracker=tracker)
 
     is_blocked = meta.get("blocked", False)
-    if card is None or is_blocked:
+    if card is not None and not is_blocked:
+        card = sanitize_card_minor_banned_words(card)
+        errors = validate_partner_card(card, is_high_risk=False, sparse=effective_sparse)
+    elif card is None or is_blocked:
         errors = ["blocked: " + str(meta.get("error", "provider_refusal"))]
     else:
         errors = validate_partner_card(card, is_high_risk=False, sparse=effective_sparse)
@@ -463,7 +533,10 @@ async def generate_partner_card_with_ladder(
             guidance=guidance_text,
         )
         card, meta = await call_card_writer(p, retry_contents, model=model, tracker=tracker)
-        if card is None or meta.get("blocked"):
+        if card is not None and not meta.get("blocked"):
+            card = sanitize_card_minor_banned_words(card)
+            errors = validate_partner_card(card, is_high_risk=False, sparse=effective_sparse)
+        elif card is None or meta.get("blocked"):
             errors = ["blocked: " + str(meta.get("error", "provider_refusal"))]
         else:
             errors = validate_partner_card(card, is_high_risk=False, sparse=effective_sparse)
@@ -487,7 +560,10 @@ async def generate_partner_card_with_ladder(
             guidance=safe_guidance,
         )
         card, meta = await call_card_writer(p, safe_contents, model=model, tracker=tracker)
-        if card is None or meta.get("blocked"):
+        if card is not None and not meta.get("blocked"):
+            card = sanitize_card_minor_banned_words(card)
+            errors = validate_partner_card(card, is_high_risk=False, sparse=effective_sparse)
+        elif card is None or meta.get("blocked"):
             errors = ["blocked: " + str(meta.get("error", "provider_refusal"))]
         else:
             errors = validate_partner_card(card, is_high_risk=False, sparse=effective_sparse)
@@ -560,7 +636,10 @@ async def generate_shared_summary_with_ladder(
     shared_card, meta = await call_shared_writer(p, contents, model=model, tracker=tracker)
 
     is_blocked = meta.get("blocked", False)
-    if shared_card is None or is_blocked:
+    if shared_card is not None and not is_blocked:
+        shared_card = sanitize_shared_minor_banned_words(shared_card)
+        errors = validate_shared_summary(shared_card, is_high_risk=False)
+    elif shared_card is None or is_blocked:
         errors = ["blocked: " + str(meta.get("error", "provider_refusal"))]
     else:
         errors = validate_shared_summary(shared_card, is_high_risk=False)
@@ -577,7 +656,10 @@ async def generate_shared_summary_with_ladder(
         )
         retry_contents = prepare_shared_writer_contents(shared_analysis, guidance=guidance)
         shared_card, meta = await call_shared_writer(p, retry_contents, model=model, tracker=tracker)
-        if shared_card is None or meta.get("blocked"):
+        if shared_card is not None and not meta.get("blocked"):
+            shared_card = sanitize_shared_minor_banned_words(shared_card)
+            errors = validate_shared_summary(shared_card, is_high_risk=False)
+        elif shared_card is None or meta.get("blocked"):
             errors = ["blocked: " + str(meta.get("error", "provider_refusal"))]
         else:
             errors = validate_shared_summary(shared_card, is_high_risk=False)
@@ -835,6 +917,31 @@ async def analyze_session(session_id: str) -> None:
             len(analyzer_res.risk_reasons or []),
         )
 
+        # Очистка hypothesis_for_other и agreed_ritual от приватных фактов чужой версии (Этап 3.10)
+        neutral_facts = [analyzer_res.shared.neutral_topic] if analyzer_res.shared and analyzer_res.shared.neutral_topic else []
+        if analyzer_res.partner_1 and analyzer_res.partner_2:
+            analyzer_res.partner_1.hypothesis_for_other = sanitize_hypothesis_for_other(
+                analyzer_res.partner_1.hypothesis_for_other,
+                other_private_facts=analyzer_res.partner_2.key_facts,
+                other_secrets=analyzer_res.partner_2.secrets,
+                facts_known_to_both=neutral_facts,
+            )
+            analyzer_res.partner_2.hypothesis_for_other = sanitize_hypothesis_for_other(
+                analyzer_res.partner_2.hypothesis_for_other,
+                other_private_facts=analyzer_res.partner_1.key_facts,
+                other_secrets=analyzer_res.partner_1.secrets,
+                facts_known_to_both=neutral_facts,
+            )
+        if analyzer_res.shared and analyzer_res.shared.agreed_ritual:
+            all_priv = (analyzer_res.partner_1.key_facts or []) + (analyzer_res.partner_2.key_facts or [])
+            all_sec = (analyzer_res.partner_1.secrets or []) + (analyzer_res.partner_2.secrets or [])
+            analyzer_res.shared.agreed_ritual = sanitize_agreed_ritual(
+                analyzer_res.shared.agreed_ritual,
+                all_private_facts=all_priv,
+                all_secrets=all_sec,
+                facts_known_to_both=neutral_facts,
+            )
+
         # ----------------------------------------------------------------------
         # ВЕТВЬ 1: ВЫСОКИЙ РИСК (HIGH) ИЛИ ОТКАЗ ПРОВАЙДЕРА
         # ----------------------------------------------------------------------
@@ -959,6 +1066,29 @@ async def analyze_session(session_id: str) -> None:
                         tracker=tracker,
                     )
 
+                # Повторная проверка: если расхождение всё равно осталось — детерминированный фоллбэк (Этап 3.10)
+                p1_s2_retry = p1_card.action_scripts[1].text if len(p1_card.action_scripts) >= 2 else ""
+                p2_s2_retry = p2_card.action_scripts[1].text if len(p2_card.action_scripts) >= 2 else ""
+                post_retry_errs = validate_ritual_consistency(
+                    p1_s2_retry,
+                    p2_s2_retry,
+                    shared_card.shared_advice or "",
+                    ritual_unfit_p1=bool(p1_card.ritual_unfit),
+                    ritual_unfit_p2=bool(p2_card.ritual_unfit),
+                )
+                if post_retry_errs:
+                    logger.warning("Ritual duration mismatch persisted after retry: %s. Applying deterministic overwrite.", post_retry_errs)
+                    rit_phrase = ""
+                    if analyzer_res.shared and analyzer_res.shared.agreed_ritual:
+                        rit_phrase = analyzer_res.shared.agreed_ritual.ritual_phrase_we or analyzer_res.shared.agreed_ritual.format or ""
+                    if not rit_phrase:
+                        rit_phrase = "делать 15-минутную паузу и обсуждать ситуацию без взаимных упрёков"
+                    det_script_text = f"Предлагаю попробовать новое правило: {rit_phrase}. Что скажешь?"
+                    if len(p1_card.action_scripts) >= 2:
+                        p1_card.action_scripts[1].text = det_script_text
+                    if len(p2_card.action_scripts) >= 2:
+                        p2_card.action_scripts[1].text = det_script_text
+
             # При risk_level == elevated: фиксированный шаблон safety_note
             safety_note_text = ""
             if is_elevated:
@@ -1040,6 +1170,9 @@ async def analyze_session(session_id: str) -> None:
                     tracker=tracker,
                     fallback_records=fallback_records,
                 )
+
+            # Разнообразие зачинов partner_perspective (Этап 3.4, 3.9)
+            diversify_partner_perspectives(p1_card, p2_card)
 
             mediator_output = MediatorOutput(
                 risk_level=analyzer_res.risk_level,

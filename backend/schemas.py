@@ -144,6 +144,10 @@ class AgreedRitual(BaseModel):
         ...,
         description="Формат проведения (например, 15 минут тишины, затем 10 минут разговора)",
     )
+    ritual_phrase_we: Optional[str] = Field(
+        default=None,
+        description="Готовая формулировка ритуала от первого лица множественного числа (мы)",
+    )
     serves_partner_1_need: str = Field(
         ...,
         description="Как ритуал удовлетворяет потребность партнера 1",

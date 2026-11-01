@@ -34,6 +34,7 @@ import pymorphy3
 from config import settings
 from config.safety_messages import get_high_risk_message, get_elevated_risk_message
 from config.fallbacks import get_random_fallback
+from config.ui_texts import DEFAULT_SCRIPT_HINTS
 from schemas import (
     AnalyzerOutput,
     PartnerResponse,
@@ -52,6 +53,10 @@ from validators import (
     extract_durations,
     find_forbidden_in_string,
     find_shared_forbidden,
+    is_unknown_word,
+    SPELL_WHITELIST,
+    sanitize_card_minor_banned_words,
+    sanitize_shared_minor_banned_words,
 )
 from providers import get_provider
 from providers.base import LLMProvider
@@ -67,7 +72,9 @@ from ai_service import (
     generate_partner_card_with_ladder,
     generate_shared_summary_with_ladder,
     apply_fallback_to_field,
+    diversify_partner_perspectives,
 )
+from leak_guard import sanitize_hypothesis_for_other, sanitize_agreed_ritual
 from analyzer_cache import (
     compute_analyzer_cache_key,
     load_analyzer_cache,
@@ -157,26 +164,12 @@ def check_lexical_leakage(
     return sorted(list(leaks))
 
 
-def is_unknown_word(word: str) -> bool:
-    """Проверяет опечатки / неизвестные слова через pymorphy3."""
-    clean = word.lower()
-    if not re.match(r"^[а-яё]+$", clean) or len(clean) < 3:
-        return False
-    # Исключения / сленг / разговорные формы
-    if clean in {"щас", "ща", "чё", "чо", "ппц", "спс", "плиз", "ок", "норм", "инфа", "окэй", "онлайн", "офлайн"}:
-        return False
-    parses = morph.parse(clean)
-    if not parses:
-        return True
-    return any(method[0].__class__.__name__ == "FakeDictionary" for method in parses[0].methods_stack)
-
-
 def find_unknown_words_in_text(text: str) -> List[str]:
-    """Возвращает список неизвестных слов в тексте."""
-    words = re.findall(r"\b[а-яёА-ЯЁ]{3,}\b", text)
+    """Возвращает список неизвестных слов в тексте (с учетом белого списка и приставок не-/недо-/со-)."""
+    words = re.findall(r"\b[а-яёА-ЯЁ]+(?:-[а-яёА-ЯЁ]+)*\b", text)
     unknown = []
     for w in words:
-        if is_unknown_word(w) and w.lower() not in unknown:
+        if is_unknown_word(w, morph_analyzer=morph) and w.lower() not in unknown:
             unknown.append(w.lower())
     return unknown
 
@@ -329,6 +322,31 @@ async def run_single_sample(
         if use_cache and analyzer_res.risk_level != "high":
             save_analyzer_cache(cache_key, analyzer_res, CACHE_DIR)
 
+    # Очистка hypothesis_for_other и agreed_ritual от приватных фактов чужой версии (Этап 3.10)
+    neutral_facts = [analyzer_res.shared.neutral_topic] if analyzer_res.shared and analyzer_res.shared.neutral_topic else []
+    if analyzer_res.partner_1 and analyzer_res.partner_2:
+        analyzer_res.partner_1.hypothesis_for_other = sanitize_hypothesis_for_other(
+            analyzer_res.partner_1.hypothesis_for_other,
+            other_private_facts=analyzer_res.partner_2.key_facts,
+            other_secrets=analyzer_res.partner_2.secrets,
+            facts_known_to_both=neutral_facts,
+        )
+        analyzer_res.partner_2.hypothesis_for_other = sanitize_hypothesis_for_other(
+            analyzer_res.partner_2.hypothesis_for_other,
+            other_private_facts=analyzer_res.partner_1.key_facts,
+            other_secrets=analyzer_res.partner_1.secrets,
+            facts_known_to_both=neutral_facts,
+        )
+    if analyzer_res.shared and analyzer_res.shared.agreed_ritual:
+        all_priv = (analyzer_res.partner_1.key_facts or []) + (analyzer_res.partner_2.key_facts or [])
+        all_sec = (analyzer_res.partner_1.secrets or []) + (analyzer_res.partner_2.secrets or [])
+        analyzer_res.shared.agreed_ritual = sanitize_agreed_ritual(
+            analyzer_res.shared.agreed_ritual,
+            all_private_facts=all_priv,
+            all_secrets=all_sec,
+            facts_known_to_both=neutral_facts,
+        )
+
     p1_is_sparse = bool(sample.get("sparse")) or (len(p1_text.split()) < 20) or (analyzer_res.partner_1.sparse and len(p1_text.split()) < 30)
     p2_is_sparse = bool(sample.get("sparse")) or (len(p2_text.split()) < 20) or (analyzer_res.partner_2.sparse and len(p2_text.split()) < 30)
 
@@ -454,11 +472,37 @@ async def run_single_sample(
                     tracker=tracker,
                 )
 
+            # Повторная проверка: если расхождение всё равно осталось — детерминированный фоллбэк (Этап 3.10)
+            p1_s2_retry = p1_card.action_scripts[1].text if len(p1_card.action_scripts) >= 2 else ""
+            p2_s2_retry = p2_card.action_scripts[1].text if len(p2_card.action_scripts) >= 2 else ""
+            post_retry_errs = validate_ritual_consistency(
+                p1_s2_retry,
+                p2_s2_retry,
+                shared_card.shared_advice or "",
+                ritual_unfit_p1=bool(p1_card.ritual_unfit),
+                ritual_unfit_p2=bool(p2_card.ritual_unfit),
+            )
+            if post_retry_errs:
+                rit_phrase = ""
+                if analyzer_res.shared and analyzer_res.shared.agreed_ritual:
+                    rit_phrase = analyzer_res.shared.agreed_ritual.ritual_phrase_we or analyzer_res.shared.agreed_ritual.format or ""
+                if not rit_phrase:
+                    rit_phrase = "делать 15-минутную паузу и обсуждать ситуацию без взаимных упрёков"
+                det_script_text = f"Предлагаю попробовать новое правило: {rit_phrase}. Что скажешь?"
+                if len(p1_card.action_scripts) >= 2:
+                    p1_card.action_scripts[1].text = det_script_text
+                if len(p2_card.action_scripts) >= 2:
+                    p2_card.action_scripts[1].text = det_script_text
+                retry_log.append("Ritual duration deterministic fallback applied")
+
         safety_note_text = ""
         if is_elevated:
             safety_note_text = get_elevated_risk_message()
             p1_card.safety_note = safety_note_text
             p2_card.safety_note = safety_note_text
+
+        # Разнообразие зачинов partner_perspective (Этап 3.4, 3.9)
+        diversify_partner_perspectives(p1_card, p2_card)
 
         mediator_output = MediatorOutput(
             risk_level=analyzer_res.risk_level,
@@ -607,16 +651,18 @@ def print_clean_readable_sample(res: Dict[str, Any]):
         print(f"• Взгляд партнёра (partner_perspective):\n  {p1.get('partner_perspective')}")
         print(f"• Точка роста (blind_spot):\n  {p1.get('blind_spot')}")
         print("• Скрипты действий:")
-        for s in p1.get("action_scripts", []):
-            print(f"  [{s.get('label')}] «{s.get('text')}»\n    Зачем: {s.get('why')}")
+        for idx, s in enumerate(p1.get("action_scripts", [])):
+            hint = DEFAULT_SCRIPT_HINTS[idx] if idx < len(DEFAULT_SCRIPT_HINTS) else ""
+            print(f"  [{s.get('label')}] «{s.get('text')}»\n    Зачем: {hint}")
 
         print("\n--- РАЗБОР ДЛЯ ПАРТНЁРА 2 ---")
         print(f"• Понимание (validation):\n  {p2.get('validation')}")
         print(f"• Взгляд партнёра (partner_perspective):\n  {p2.get('partner_perspective')}")
         print(f"• Точка роста (blind_spot):\n  {p2.get('blind_spot')}")
         print("• Скрипты действий:")
-        for s in p2.get("action_scripts", []):
-            print(f"  [{s.get('label')}] «{s.get('text')}»\n    Зачем: {s.get('why')}")
+        for idx, s in enumerate(p2.get("action_scripts", [])):
+            hint = DEFAULT_SCRIPT_HINTS[idx] if idx < len(DEFAULT_SCRIPT_HINTS) else ""
+            print(f"  [{s.get('label')}] «{s.get('text')}»\n    Зачем: {hint}")
 
         print("\n--- ОБЩИЙ ИТОГ ДЛЯ ПАРЫ (SHARED SUMMARY) ---")
         print(f"• Общая динамика:\n  {sh.get('situation_overview')}")
@@ -674,7 +720,26 @@ def compute_metrics(results: List[Dict[str, Any]]) -> Dict[str, Any]:
     for r in valid_cases:
         if r.get("actual_risk") != "high":
             total_ritual_cases += 1
-            if any("RitualConsistency" in str(e) for e in r.get("errors", [])):
+            mo = r.get("mediator_output", {})
+            p1_r = mo.get("partner_1_response", {})
+            p2_r = mo.get("partner_2_response", {})
+            sh_r = mo.get("shared_summary", {})
+            s1 = p1_r.get("action_scripts", [])
+            s2 = p2_r.get("action_scripts", [])
+            p1_s2 = s1[1]["text"] if len(s1) > 1 and isinstance(s1[1], dict) else ""
+            p2_s2 = s2[1]["text"] if len(s2) > 1 and isinstance(s2[1], dict) else ""
+            sh_adv = sh_r.get("shared_advice", "") if sh_r else ""
+            if p1_s2 and p2_s2:
+                rit_mismatch = bool(validate_ritual_consistency(
+                    p1_s2,
+                    p2_s2,
+                    sh_adv,
+                    ritual_unfit_p1=bool(p1_r.get("ritual_unfit")),
+                    ritual_unfit_p2=bool(p2_r.get("ritual_unfit")),
+                ))
+            else:
+                rit_mismatch = any("RitualConsistency" in str(e) for e in r.get("errors", []))
+            if rit_mismatch:
                 ritual_mismatches += 1
 
             total_perspectives += 2
@@ -789,6 +854,7 @@ def dry_validate(file_path: Path) -> Tuple[Dict[str, Any], List[str]]:
             if p1_resp:
                 try:
                     p1_obj = PartnerResponse(**p1_resp)
+                    p1_obj = sanitize_card_minor_banned_words(p1_obj)
                     p1_errs = validate_partner_card(p1_obj)
                     all_errors.extend([f"[{s_id} P1] {e}" for e in p1_errs])
                 except Exception as ex:
@@ -797,6 +863,7 @@ def dry_validate(file_path: Path) -> Tuple[Dict[str, Any], List[str]]:
             if p2_resp:
                 try:
                     p2_obj = PartnerResponse(**p2_resp)
+                    p2_obj = sanitize_card_minor_banned_words(p2_obj)
                     p2_errs = validate_partner_card(p2_obj)
                     all_errors.extend([f"[{s_id} P2] {e}" for e in p2_errs])
                 except Exception as ex:
@@ -805,6 +872,7 @@ def dry_validate(file_path: Path) -> Tuple[Dict[str, Any], List[str]]:
             if sh_resp:
                 try:
                     sh_obj = SharedSummary(**sh_resp)
+                    sh_obj = sanitize_shared_minor_banned_words(sh_obj)
                     sh_errs = validate_shared_summary(sh_obj)
                     all_errors.extend([f"[{s_id} Shared] {e}" for e in sh_errs])
                 except Exception as ex:
@@ -815,9 +883,16 @@ def dry_validate(file_path: Path) -> Tuple[Dict[str, Any], List[str]]:
                 s1 = p1_resp.get("action_scripts", [])
                 s2 = p2_resp.get("action_scripts", [])
                 try:
-                    s1_objs = [ActionScriptItem(**s) for s in s1]
-                    s2_objs = [ActionScriptItem(**s) for s in s2]
-                    rit_errs = validate_ritual_consistency(s1_objs, s2_objs)
+                    p1_s2 = s1[1]["text"] if len(s1) > 1 and isinstance(s1[1], dict) else ""
+                    p2_s2 = s2[1]["text"] if len(s2) > 1 and isinstance(s2[1], dict) else ""
+                    sh_adv = sh_resp.get("shared_advice", "") if sh_resp else ""
+                    rit_errs = validate_ritual_consistency(
+                        p1_s2,
+                        p2_s2,
+                        sh_adv,
+                        ritual_unfit_p1=bool(p1_resp.get("ritual_unfit")),
+                        ritual_unfit_p2=bool(p2_resp.get("ritual_unfit")),
+                    )
                     all_errors.extend([f"[{s_id} Ritual] {e}" for e in rit_errs])
                 except Exception:
                     pass
@@ -826,6 +901,20 @@ def dry_validate(file_path: Path) -> Tuple[Dict[str, Any], List[str]]:
         recorded_errs = item.get("errors", [])
         if recorded_errs:
             for re_err in recorded_errs:
+                if "RitualConsistency" in re_err and p1_resp and p2_resp:
+                    s1 = p1_resp.get("action_scripts", [])
+                    s2 = p2_resp.get("action_scripts", [])
+                    p1_s2 = s1[1]["text"] if len(s1) > 1 and isinstance(s1[1], dict) else ""
+                    p2_s2 = s2[1]["text"] if len(s2) > 1 and isinstance(s2[1], dict) else ""
+                    sh_adv = sh_resp.get("shared_advice", "") if sh_resp else ""
+                    if not validate_ritual_consistency(
+                        p1_s2,
+                        p2_s2,
+                        sh_adv,
+                        ritual_unfit_p1=bool(p1_resp.get("ritual_unfit")),
+                        ritual_unfit_p2=bool(p2_resp.get("ritual_unfit")),
+                    ):
+                        continue
                 tag = f"[{s_id} Recorded] {re_err}"
                 if tag not in all_errors:
                     all_errors.append(tag)

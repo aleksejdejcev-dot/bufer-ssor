@@ -9,83 +9,70 @@
 """
 
 import re
-from typing import List, Dict, Any, Union, Optional
+from typing import List, Dict, Any, Union, Optional, Set
 import snowballstemmer
 from schemas import PartnerResponse, SharedSummary, ActionScriptItem, MediatorOutput
+from config.banned import (
+    FORBIDDEN_SINGLE_STEMS,
+    FORBIDDEN_PHRASE_PATTERNS,
+    FORBIDDEN_SCRIPT_PATTERNS,
+    SHARED_FORBIDDEN_PATTERNS,
+    HEDGE_WORDS,
+    SPELL_WHITELIST,
+    sanitize_minor_banned_words,
+    sanitize_card_minor_banned_words,
+    sanitize_shared_minor_banned_words,
+)
 
 stemmer = snowballstemmer.stemmer("russian")
-
-# Запрещенные основы (стемы) одиночных слов (проверяются через stemmer)
-FORBIDDEN_SINGLE_STEMS = {
-    "конструктивн",  # конструктивный, конструктивно, конструктивность
-    "ушат",          # ушат, ушатом, ушата
-    "неуместн",      # неуместно, неуместный, неуместность
-    "несоразмерн",    # несоразмерно, несоразмерный
-    "бойкот",        # бойкот, бойкотировать
-    "абсолютн",      # абсолютно, абсолютный
-    "жизнен",        # жизненно, жизненный, жизненно важно
-    "биоритм",       # биоритм, биоритмы
-    "протокол",      # протокол
-    "нарцисс",       # нарцисс, нарциссизм
-    "газлайтинг",    # газлайтинг
-    "токсич",        # токсично, токсичный
-    "созависим",     # созависимость, созависимый
-    "проработа",     # проработать, проработайте, проработка
-    "сепарац",       # сепарация, сепарации, сепарироваться
-    "гештальт",      # гештальт, гештальты
-    "травм",         # травма, травмы, травмировать
-}
-
-# Запрещенные составные фразы (проверяются через регулярные выражения с гибкими окончаниями)
-FORBIDDEN_PHRASE_PATTERNS = [
-    r"безопасн\w*\s+пространств\w*",
-    r"безопасн\w*\s+сред\w*",
-    r"пространств\w*\s+(?:для\s+)?диалог\w*",
-    r"настоящ\w*\s+ад\b",
-    r"эмоциональн\w*\s+изоляци\w*",
-    r"жизненн\w*\s+важн\w*",
-    r"ты\s+всегда\b",
-    r"ты\s+никогда\b",
-    r"(?:вы|ты)\s+обязан\w*",
-    r"(?:вам|тебе)\s+нужно\b",
-]
-
-# Запрещенные фразы для скриптов действий (action_scripts) — честность формулировок (Этап 3.3)
-FORBIDDEN_SCRIPT_PATTERNS = [
-    r"\bхотелк\w*",
-    r"\bкаприз\w*",
-    r"\bдутьс[яе]\b",
-    r"\bнадул(?:ся|ась|ись)\b",
-    r"обид\w*-страдани\w*",
-    r"я\s+тебя\s+любл[юе]",
-    r"мне\s+стыдно\b",
-    r"мне\s+жаль\b",
-    r"не\s+хотел[аои]?\s+злиться\b",
-]
-
-# Смягчители для partner_perspective
-HEDGE_WORDS = ["возможно", "похоже", "бывает"]
 
 # Обратная совместимость для тестов
 GLOBAL_FORBIDDEN_PATTERNS = list(FORBIDDEN_SINGLE_STEMS) + FORBIDDEN_PHRASE_PATTERNS
 
-# Дополнительно запрещенные фразы и слова в shared_summary (строго уровень 'вы')
-SHARED_FORBIDDEN_PATTERNS = [
-    r"один\s+партн[её]р",
-    r"другой\s+партн[её]р",
-    r"один\s+из",
-    r"кто-то",
-    r"\bодного\b",
-    r"\bдругого\b",
-    r"твой\s+партн[её]р",
-    r"\bты\b",
-    r"\bтебя\b",
-    r"\bтебе\b",
-    r"\bтобой\b",
-    r"\bтобою\b",
-    r"\bча[яеюём]\b",  # чай, чаем, чаю, чая
-    r"\bчай\b",
-]
+_spell_morph = None
+
+
+def get_spell_morph() -> Any:
+    """Ленивая инициализация pymorphy3 для проверки орфографии."""
+    global _spell_morph
+    if _spell_morph is None:
+        import pymorphy3
+        _spell_morph = pymorphy3.MorphAnalyzer()
+    return _spell_morph
+
+
+def is_unknown_word(word: str, morph_analyzer: Optional[Any] = None) -> bool:
+    """
+    Проверяет, является ли слово опечаткой или неизвестным словом (Этап 3.9).
+    Учитывает белый список, слова с дефисом, и приставки 'не-', 'недо-', 'со-'.
+    """
+    clean = word.lower().strip(".,!?:;\"'«»()[]{}*`~")
+    if not clean or len(clean) < 3:
+        return False
+    if clean in SPELL_WHITELIST:
+        return False
+
+    morph = morph_analyzer or get_spell_morph()
+
+    if "-" in clean:
+        parts = clean.split("-")
+        if all(morph.word_is_known(p) or p in SPELL_WHITELIST for p in parts if len(p) >= 2):
+            return False
+
+    if morph.word_is_known(clean):
+        return False
+
+    # Проверка слов с приставками 'недо-', 'не-', 'со-'
+    for pfx in ("недо", "не", "со"):
+        if clean.startswith(pfx) and len(clean) > len(pfx) + 2:
+            stem = clean[len(pfx):]
+            if morph.word_is_known(stem) or stem in SPELL_WHITELIST:
+                return False
+
+    parses = morph.parse(clean)
+    if not parses:
+        return True
+    return any(method[0].__class__.__name__ == "FakeDictionary" for method in parses[0].methods_stack)
 
 
 def count_sentences(text: str) -> int:
@@ -186,6 +173,92 @@ def extract_durations(text: str) -> List[str]:
     return sorted(list(dict.fromkeys(durations)))
 
 
+def duration_str_to_minutes(d_str: str) -> Optional[int]:
+    """Преобразует строку длительности ('15 мин', '1 час') в число минут (Этап 3.10)."""
+    m = re.search(r"(\d+)\s*(мин|час|сут|дн)", d_str.lower())
+    if not m:
+        nums = re.findall(r"\d+", d_str)
+        return int(nums[0]) if nums else None
+    val = int(m.group(1))
+    unit = m.group(2)
+    if "мин" in unit:
+        return val
+    elif "час" in unit:
+        return val * 60
+    elif "сут" in unit or "дн" in unit:
+        return val * 24 * 60
+    return val
+
+
+def to_minute_set(durs: Any) -> Set[int]:
+    """Нормализует набор длительностей (строки или числа) в множество минут (int) (Этап 3.10)."""
+    if not durs:
+        return set()
+    res = set()
+    for d in durs:
+        if isinstance(d, int):
+            res.add(d)
+        elif isinstance(d, str):
+            val = duration_str_to_minutes(d)
+            if val is not None:
+                res.add(val)
+    return res
+
+
+def are_durations_consistent(durs1: Any, durs2: Any) -> bool:
+    """
+    Проверяет согласованность двух наборов длительностей (Этап 3.10).
+    Нормализует в минуты (числа int) и считает согласованными, если:
+    1. A == B
+    2. Одно множество отличается от другого только числом, равным сумме остальных элементов (например, {10, 5} и {10, 5, 15})
+    3. Сумма элементов одного равна единственному элементу другого (например, {10, 5} и {15})
+    4. Одно множество содержит единственный элемент, равный максимальному элементу другого,
+       при условии что остальные элементы суммируются в этот максимум (например, {10, 5, 15} и {15})
+    """
+    A = to_minute_set(durs1)
+    B = to_minute_set(durs2)
+
+    if not A or not B:
+        return True
+
+    # 1. Точное совпадение
+    if A == B:
+        return True
+
+    # 2. Одно множество отличается числом, равным сумме остальных элементов
+    if len(B - A) == 1:
+        diff_elem = next(iter(B - A))
+        remaining = B - {diff_elem}
+        if remaining and sum(remaining) == diff_elem:
+            return True
+
+    if len(A - B) == 1:
+        diff_elem = next(iter(A - B))
+        remaining = A - {diff_elem}
+        if remaining and sum(remaining) == diff_elem:
+            return True
+
+    # 3. Сумма элементов одного равна единственному элементу другого
+    if len(B) == 1 and sum(A) == next(iter(B)):
+        return True
+    if len(A) == 1 and sum(B) == next(iter(A)):
+        return True
+
+    # 4. Единственный элемент одного входит в другое и равен сумме остальных элементов
+    if len(B) == 1 and next(iter(B)) in A:
+        b_val = next(iter(B))
+        rest = A - {b_val}
+        if rest and sum(rest) == b_val:
+            return True
+    if len(A) == 1 and next(iter(A)) in B:
+        a_val = next(iter(A))
+        rest = B - {a_val}
+        if rest and sum(rest) == a_val:
+            return True
+
+    return False
+
+
 def validate_ritual_consistency(
     p1_script2_text: str,
     p2_script2_text: str,
@@ -194,24 +267,24 @@ def validate_ritual_consistency(
     ritual_unfit_p2: bool = False,
 ) -> List[str]:
     """
-    Валидатор согласованности параметров ритуала (Этап 3.3).
-    Проверяет, что длительности в скриптах 2 обоих партнеров и в shared_advice совпадают.
+    Валидатор согласованности параметров ритуала (Этап 3.3, 3.10).
+    Проверяет, что длительности в скриптах 2 обоих партнеров и в shared_advice согласованы.
     """
     errors: List[str] = []
     dur_p1 = set(extract_durations(p1_script2_text)) if not ritual_unfit_p1 else set()
     dur_p2 = set(extract_durations(p2_script2_text)) if not ritual_unfit_p2 else set()
     dur_sh = set(extract_durations(shared_advice_text))
 
-    # Если в обоих скриптах указана длительность, они обязаны совпадать
-    if dur_p1 and dur_p2 and dur_p1 != dur_p2:
+    # Если в обоих скриптах указана длительность, они обязаны быть согласованы
+    if dur_p1 and dur_p2 and not are_durations_consistent(dur_p1, dur_p2):
         errors.append(f"Длительности в скриптах #2 партнеров не согласованы: P1={dur_p1} vs P2={dur_p2}. Используй длительность из ritual.")
 
     # Скрипт 1 должен согласовываться с общим советом
-    if dur_sh and dur_p1 and not (dur_sh & dur_p1):
+    if dur_sh and dur_p1 and not (are_durations_consistent(dur_sh, dur_p1) or bool(dur_sh & dur_p1)):
         errors.append(f"Длительность в скрипте #2 партнера 1 ({dur_p1}) не совпадает с общим ритуалом ({dur_sh}). Используй длительность из ritual.")
 
     # Скрипт 2 должен согласовываться с общим советом
-    if dur_sh and dur_p2 and not (dur_sh & dur_p2):
+    if dur_sh and dur_p2 and not (are_durations_consistent(dur_sh, dur_p2) or bool(dur_sh & dur_p2)):
         errors.append(f"Длительность в скрипте #2 партнера 2 ({dur_p2}) не совпадает с общим ритуалом ({dur_sh}). Используй длительность из ritual.")
 
     return errors
