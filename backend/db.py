@@ -1,6 +1,6 @@
 """
 Модуль доступа к данным (фасад для Repository).
-Делегирует все операции активному экземпляру Repository (SupabaseRepo или InMemoryRepo).
+Делегирует все операции активному экземпляру Repository (PostgresRepo или InMemoryRepo).
 """
 
 from typing import Dict, Any, Optional, List, Tuple
@@ -74,6 +74,10 @@ def update_session_status(
     risk_level: Optional[str] = None,
 ) -> None:
     return get_repo().update_session_status(session_id, status, completed_at, risk_level)
+
+
+def claim_session_for_analysis(session_id: str) -> bool:
+    return get_repo().claim_session_for_analysis(session_id)
 
 
 def save_analysis_results(

@@ -13,7 +13,7 @@ from aiogram.filters import CommandObject
 from main import app, get_current_user
 from repo import set_repo
 from repo.in_memory_repo import InMemoryRepo
-from repo.supabase_repo import SupabaseRepo
+from repo.postgres_repo import PostgresRepo
 from repo.base import Repository
 from bot import handle_start, handle_conflict_input
 from schemas import (
@@ -448,13 +448,13 @@ def test_delete_flow():
 # 16. test_repo_contract
 def test_repo_contract():
     in_mem_methods = {m for m in dir(InMemoryRepo) if not m.startswith("_")}
-    supa_methods = {m for m in dir(SupabaseRepo) if not m.startswith("_")}
+    postgres_methods = {m for m in dir(PostgresRepo) if not m.startswith("_")}
     base_methods = {m for m in dir(Repository) if not m.startswith("_")}
 
     missing_in_mem = base_methods - in_mem_methods
-    missing_supa = base_methods - supa_methods
+    missing_postgres = base_methods - postgres_methods
     assert not missing_in_mem, f"InMemoryRepo misses: {missing_in_mem}"
-    assert not missing_supa, f"SupabaseRepo misses: {missing_supa}"
+    assert not missing_postgres, f"PostgresRepo misses: {missing_postgres}"
 
 
 # 17. test_leak_guard_lemmas

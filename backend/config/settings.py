@@ -1,24 +1,36 @@
 """
 Конфигурация приложения «Буфер Ссор».
 Все параметры загружаются из переменных окружения или файла .env.
-Имя модели Gemini берется ТОЛЬКО из GEMINI_MODEL (значение: gemini-3.8-flash, не хардкодить в бизнес-коде).
 """
 
+import re
 from typing import List, Union, Optional
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+def mask_db_url(url: str) -> str:
+    """Маскирует пароль в строке подключения к БД."""
+    if not url:
+        return ""
+    return re.sub(r"://([^:]+):([^@]+)@", r"://\1:***@", url)
+
+
 class Settings(BaseSettings):
-    # Supabase (Postgres & Service Role Client)
-    SUPABASE_URL: str = ""
-    SUPABASE_SERVICE_KEY: str = ""
+    # База данных PostgreSQL
+    DATABASE_URL: str = ""
+    DATABASE_URL_TEST: str = ""
+    DATABASE_URL_APP_TEST: str = ""
+    DB_SSLMODE: str = "disable"  # "disable" для локального Docker; в production: "require", "verify-ca", "verify-full"
+    DB_SSL_ROOT_CERT: Optional[str] = None
+    DB_POOL_MIN: int = 2
+    DB_POOL_MAX: int = 10
 
     # Telegram Bot & Webhook
     TELEGRAM_BOT_TOKEN: str = ""
     TELEGRAM_WEBHOOK_SECRET: str = ""
     WEBHOOK_BASE_URL: str = ""
 
-    # Выбор LLM-провайдера (Этап 3.5: gigachat | gemini)
+    # Выбор LLM-провайдера (gigachat | gemini)
     LLM_PROVIDER: str = "gigachat"
 
     # Google Gemini AI
@@ -26,7 +38,7 @@ class Settings(BaseSettings):
     GEMINI_MODEL: str = "gemini-3.5-flash-lite"
     GEMINI_CONCURRENCY: int = 2
 
-    # Sber GigaChat AI (Этап 3.5)
+    # Sber GigaChat AI
     GIGACHAT_CREDENTIALS: str = ""
     GIGACHAT_SCOPE: str = "GIGACHAT_API_PERS"
     GIGACHAT_MODEL: str = "GigaChat-3-Ultra"
@@ -35,13 +47,13 @@ class Settings(BaseSettings):
     GIGACHAT_CONCURRENCY: int = 2
     GIGACHAT_PROMPT_MODE: str = "standard"  # "standard" | "compact"
 
-    # Модели для конкретных ролей (переопределение общей модели провайдера)
+    # Модели для конкретных ролей
     ANALYZER_MODEL: Optional[str] = None
     CARD_MODEL: Optional[str] = None
     SHARED_MODEL: Optional[str] = None
     CHECKER_MODEL: Optional[str] = None
 
-    # Параметры генерации Gemini (Этап 3.1)
+    # Параметры генерации
     ANALYZER_TEMPERATURE: float = 0.3
     CARD_WRITER_TEMPERATURE: float = 0.8
     SHARED_WRITER_TEMPERATURE: float = 0.7
@@ -78,18 +90,14 @@ class Settings(BaseSettings):
     RESULTS_RETENTION_DAYS: int = 30
     PAYMENT_RETENTION_YEARS: Optional[int] = None
 
-    # Использование тестового кэша
-    TEST_CACHE: bool = False
-
     # Настройки сервера
     HOST: str = "0.0.0.0"
     PORT: int = 8000
 
-    # Опциональный прокси для Gemini API (если требуется в регионе)
+    # Опциональный прокси для Gemini API
     HTTPS_PROXY: str = ""
     HTTP_PROXY: str = ""
 
-    # Загружаем из текущего каталога или родительского
     model_config = SettingsConfigDict(
         env_file=(".env", "../.env"),
         env_file_encoding="utf-8",
@@ -114,6 +122,27 @@ def validate_production_security(s: Settings) -> None:
             errors.append("INPUT_ENCRYPTION_KEY обязателен в режиме production")
         if not s.PAYMENT_HASH_KEY:
             errors.append("PAYMENT_HASH_KEY обязателен в режиме production")
+        if s.DATABASE_URL:
+            import urllib.parse
+            parsed_db = urllib.parse.urlparse(s.DATABASE_URL)
+            is_local = parsed_db.hostname in ("localhost", "127.0.0.1")
+
+            # D2: disable допустим только для локального Docker; в production (на удаленном хосте) допустимы require, verify-ca, verify-full
+            if is_local:
+                if s.DB_SSLMODE not in ("disable", "require", "verify-ca", "verify-full"):
+                    errors.append(f"Недопустимый DB_SSLMODE: {s.DB_SSLMODE}")
+            else:
+                if s.DB_SSLMODE not in ("require", "verify-ca", "verify-full"):
+                    errors.append(f"В режиме production DB_SSLMODE должен быть require, verify-ca или verify-full (текущий: {s.DB_SSLMODE})")
+
+            # Валидация стойкости пароля БД в production (для боевых удаленных БД)
+            db_password = parsed_db.password or ""
+            forbidden_dev_passwords = {"buffer_dev_pass", "migrator_dev_pass", "app_user_dev_pass"}
+            if not is_local:
+                if db_password in forbidden_dev_passwords:
+                    errors.append(f"В режиме production запрещено использовать dev-пароль '{db_password}' в DATABASE_URL")
+                if len(db_password) < 16:
+                    errors.append("В режиме production пароль в DATABASE_URL должен быть не короче 16 символов")
         if errors:
             raise RuntimeError(
                 "КРИТИЧЕСКАЯ ОШИБКА БЕЗОПАСНОСТИ: Запуск в production заблокирован из-за небезопасной конфигурации:\n - "
@@ -121,10 +150,20 @@ def validate_production_security(s: Settings) -> None:
             )
 
 
-# Проверяем безопасность при инициализации
+def validate_db_startup_security(s: Settings, is_superuser: bool, is_tls: bool) -> None:
+    """
+    Проверки подключения к БД при старте приложения в production (D9).
+    Запрещает запуск под суперпользователем и без TLS.
+    """
+    if s.ENVIRONMENT == "production":
+        if is_superuser:
+            raise RuntimeError("КРИТИЧЕСКАЯ ОШИБКА БЕЗОПАСНОСТИ: Запуск в production под суперпользователем PostgreSQL строго запрещен.")
+        if not is_tls:
+            raise RuntimeError("КРИТИЧЕСКАЯ ОШИБКА БЕЗОПАСНОСТИ: Подключение к PostgreSQL в production допустимо только по зашифрованному каналу TLS.")
+
+
 validate_production_security(settings)
 
-# Если прокси настроен в .env, экспортируем в системные переменные окружения
 if settings.HTTPS_PROXY:
     import os
     os.environ["HTTPS_PROXY"] = settings.HTTPS_PROXY

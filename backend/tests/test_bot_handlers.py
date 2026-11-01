@@ -11,8 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 TEST_FERNET_KEY = base64.urlsafe_b64encode(os.urandom(32)).decode()
 os.environ["INPUT_ENCRYPTION_KEY"] = TEST_FERNET_KEY
-os.environ["SUPABASE_URL"] = "https://dummy.supabase.co"
-os.environ["SUPABASE_SERVICE_KEY"] = "dummy_key"
+os.environ["DATABASE_URL"] = "postgresql://buffer_admin:test_password@127.0.0.1:5432/buffer_ssor_test"
 os.environ["TELEGRAM_BOT_TOKEN"] = "123456:DUMMY_TOKEN"
 os.environ["TELEGRAM_WEBHOOK_SECRET"] = "dummy_secret"
 os.environ["WEBHOOK_BASE_URL"] = "https://test.ngrok.app"

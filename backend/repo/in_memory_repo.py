@@ -188,6 +188,15 @@ class InMemoryRepo:
             if risk_level:
                 s["risk_level"] = risk_level
 
+    def claim_session_for_analysis(self, session_id: str) -> bool:
+        s = self.conflict_sessions.get(session_id)
+        if not s:
+            return False
+        if s.get("status") in ("processing", "analyzing", "completed", "failed", "expired", "purged_by_retention"):
+            return False
+        s["status"] = "processing"
+        return True
+
     def save_analysis_results(
         self,
         session_id: str,
@@ -226,13 +235,16 @@ class InMemoryRepo:
         payload_encrypted: bytes,
     ) -> Dict[str, Any]:
         p_id = str(uuid.uuid4())
+        now = datetime.now(timezone.utc)
+        expires_at = (now + timedelta(hours=getattr(settings, "RAW_INPUT_TTL_HOURS", 48))).isoformat()
         item = {
             "id": p_id,
             "session_id": session_id,
             "author_telegram_id": author_telegram_id,
             "kind": kind,
             "payload_encrypted": payload_encrypted,
-            "created_at": datetime.now(timezone.utc).isoformat(),
+            "created_at": now.isoformat(),
+            "expires_at": expires_at,
         }
         self.pending_inputs[p_id] = item
         return item
@@ -265,10 +277,12 @@ class InMemoryRepo:
             del self.pending_inputs[pid]
 
     def cleanup_expired_pending_inputs(self) -> int:
-        cutoff = (datetime.now(timezone.utc) - timedelta(hours=settings.RAW_INPUT_TTL_HOURS)).isoformat()
+        now_iso = datetime.now(timezone.utc).isoformat()
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=getattr(settings, "RAW_INPUT_TTL_HOURS", 48))).isoformat()
         to_del = [
             pid for pid, p in self.pending_inputs.items()
-            if p.get("created_at", "") <= cutoff
+            if (p.get("expires_at") and p["expires_at"] <= now_iso)
+            or (p.get("created_at") and p["created_at"] <= cutoff)
         ]
         for pid in to_del:
             del self.pending_inputs[pid]
@@ -388,3 +402,62 @@ class InMemoryRepo:
 
     def reset_invite_bruteforce(self, telegram_id: int) -> None:
         self.rate_limiter.reset(f"invite_fail:{telegram_id}")
+
+    def cleanup_rate_limits(self, max_age_seconds: int = 3600) -> int:
+        now = datetime.now(timezone.utc)
+        purged = 0
+        keys_to_delete = []
+        for k, v in self.rate_limiter._history.items():
+            first_ts = v[0] if v else 0
+            if (now.timestamp() - first_ts) > max_age_seconds:
+                keys_to_delete.append(k)
+        for k in keys_to_delete:
+            del self.rate_limiter._history[k]
+            purged += 1
+        return purged
+
+    def cleanup_expired_invites(self, ttl_hours: int = 48) -> int:
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=ttl_hours)
+        purged = 0
+        to_delete = []
+        for c_id, c in self.couples.items():
+            if c.get("partner_2_id") is None:
+                c_created = datetime.fromisoformat(c["created_at"])
+                if c_created.tzinfo is None:
+                    c_created = c_created.replace(tzinfo=timezone.utc)
+                if c_created <= cutoff:
+                    to_delete.append(c_id)
+        for c_id in to_delete:
+            del self.couples[c_id]
+            purged += 1
+        return purged
+
+    def cleanup_expired_payments(self, retention_years: int) -> int:
+        cutoff = datetime.now(timezone.utc) - timedelta(days=365 * retention_years)
+        purged = 0
+        to_delete = []
+        for p_id, p in self.payments.items():
+            p_created = datetime.fromisoformat(p["created_at"])
+            if p_created.tzinfo is None:
+                p_created = p_created.replace(tzinfo=timezone.utc)
+            if p_created <= cutoff:
+                to_delete.append(p_id)
+        for p_id in to_delete:
+            del self.payments[p_id]
+            purged += 1
+        return purged
+
+    def try_advisory_lock(self, lock_id: int) -> bool:
+        if not hasattr(self, "_advisory_locks"):
+            self._advisory_locks = set()
+        if lock_id in self._advisory_locks:
+            return False
+        self._advisory_locks.add(lock_id)
+        return True
+
+    def release_advisory_lock(self, lock_id: int) -> bool:
+        if hasattr(self, "_advisory_locks") and lock_id in self._advisory_locks:
+            self._advisory_locks.remove(lock_id)
+            return True
+        return False
+

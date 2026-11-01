@@ -3,7 +3,7 @@ import inspect
 from pathlib import Path
 from repo.base import Repository
 from repo.in_memory_repo import InMemoryRepo
-from repo.supabase_repo import SupabaseRepo
+from repo.postgres_repo import PostgresRepo
 
 
 def get_interface_methods(protocol_cls):
@@ -22,16 +22,16 @@ def test_repo_implementations_match_interface():
         if not name.startswith("_")
     }
 
-    supabase_methods = {
-        name for name, val in inspect.getmembers(SupabaseRepo, predicate=inspect.isfunction)
+    postgres_methods = {
+        name for name, val in inspect.getmembers(PostgresRepo, predicate=inspect.isfunction)
         if not name.startswith("_")
     }
 
     missing_in_memory = interface_methods - in_memory_methods
     assert not missing_in_memory, f"В InMemoryRepo отсутствуют методы интерфейса: {missing_in_memory}"
 
-    missing_supabase = interface_methods - supabase_methods
-    assert not missing_supabase, f"В SupabaseRepo отсутствуют методы интерфейса: {missing_supabase}"
+    missing_postgres = interface_methods - postgres_methods
+    assert not missing_postgres, f"В PostgresRepo отсутствуют методы интерфейса: {missing_postgres}"
 
 
 def test_ast_repo_calls_exist_in_interface():

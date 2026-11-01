@@ -1,0 +1,690 @@
+"""
+Реализация слоя доступа к данным Repository на основе PostgreSQL и asyncpg.
+Использует пул соединений, параметризованные SQL-запросы, транзакции и блокировки.
+"""
+
+import asyncio
+import threading
+import json
+import uuid
+import re
+from datetime import datetime, timezone, timedelta
+from typing import Dict, Any, Optional, List, Tuple
+import asyncpg
+from config import settings
+from rate_limiter import RateLimiter, normalize_invite_code
+
+
+def mask_db_url(url: str) -> str:
+    """Маскирует пароль в URL подключения к базе данных."""
+    if not url:
+        return ""
+    return re.sub(r"://([^:]+):([^@]+)@", r"://\1:***@", url)
+
+
+def _format_row(row: Optional[asyncpg.Record]) -> Optional[Dict[str, Any]]:
+    """Преобразует asyncpg.Record в стандартный словарь с конвертацией UUID и дат."""
+    if row is None:
+        return None
+    d = dict(row)
+    for k, v in d.items():
+        if isinstance(v, uuid.UUID):
+            d[k] = str(v)
+        elif isinstance(v, datetime):
+            d[k] = v.isoformat()
+        elif isinstance(v, bytes):
+            d[k] = bytes(v)
+        elif isinstance(v, str) and (k.startswith("ai_advice") or k == "shared_summary"):
+            try:
+                d[k] = json.loads(v)
+            except Exception:
+                pass
+    return d
+
+
+def _format_rows(rows: List[asyncpg.Record]) -> List[Dict[str, Any]]:
+    return [_format_row(r) for r in rows if r is not None]  # type: ignore
+
+
+class PostgresRepo:
+    """
+    Реализация интерфейса Repository поверх PostgreSQL с использованием asyncpg.
+    Поддерживает изолированный background-loop для безопасного выполнения в любом контексте.
+    """
+
+    def __init__(
+        self,
+        database_url: Optional[str] = None,
+        min_pool_size: Optional[int] = None,
+        max_pool_size: Optional[int] = None,
+        ssl_mode: Optional[str] = None,
+    ):
+        self.database_url = database_url or settings.DATABASE_URL
+        self.min_pool_size = min_pool_size or getattr(settings, "DB_POOL_MIN", 2)
+        self.max_pool_size = max_pool_size or getattr(settings, "DB_POOL_MAX", 10)
+        self.ssl_mode = ssl_mode or getattr(settings, "DB_SSLMODE", "disable")
+        self.rate_limiter = RateLimiter()
+
+        self._pool: Optional[asyncpg.Pool] = None
+        self._loop = asyncio.new_event_loop()
+        self._thread = threading.Thread(target=self._start_background_loop, daemon=True)
+        self._thread.start()
+        self._advisory_conn: Optional[asyncpg.Connection] = None
+        self._advisory_lock_id: Optional[int] = None
+
+    def _start_background_loop(self):
+        asyncio.set_event_loop(self._loop)
+        self._loop.run_forever()
+
+    def _run_async(self, coro, timeout: float = 30.0):
+        future = asyncio.run_coroutine_threadsafe(coro, self._loop)
+        return future.result(timeout=timeout)
+
+    async def _get_pool(self) -> asyncpg.Pool:
+        if self._pool is None:
+            if not self.database_url:
+                raise RuntimeError("DATABASE_URL is not configured for PostgresRepo")
+
+            ssl_param = None
+            if self.ssl_mode in ("require", "verify-ca", "verify-full"):
+                import ssl
+                ssl_param = ssl.create_default_context()
+                if self.ssl_mode == "require":
+                    ssl_param.check_hostname = False
+                    ssl_param.verify_mode = ssl.CERT_NONE
+
+            self._pool = await asyncpg.create_pool(
+                dsn=self.database_url,
+                min_size=self.min_pool_size,
+                max_size=self.max_pool_size,
+                ssl=ssl_param,
+            )
+        return self._pool
+
+    def close(self):
+        if self._advisory_conn is not None:
+            try:
+                self._run_async(self.release_advisory_lock(self._advisory_lock_id or 0))
+            except Exception:
+                pass
+        if self._pool is not None:
+            self._run_async(self._pool.close())
+            self._pool = None
+
+    # ==========================================================================
+    # Методы интерфейса Repository
+    # ==========================================================================
+
+    def reset_state(self) -> None:
+        """Очищает данные (используется строго в тестовой БД через DML DELETE)."""
+        async def _reset():
+            pool = await self._get_pool()
+            async with pool.acquire() as conn:
+                await conn.execute("""
+                    DELETE FROM rate_limits;
+                    DELETE FROM pending_inputs;
+                    DELETE FROM conflict_sessions;
+                    DELETE FROM payments;
+                    DELETE FROM couples;
+                    DELETE FROM users;
+                """)
+        self._run_async(_reset())
+
+    def get_user(self, telegram_id: int) -> Optional[Dict[str, Any]]:
+        async def _impl():
+            pool = await self._get_pool()
+            async with pool.acquire() as conn:
+                row = await conn.fetchrow("SELECT * FROM users WHERE telegram_id = $1;", telegram_id)
+                return _format_row(row)
+        return self._run_async(_impl())
+
+    def upsert_user(self, telegram_id: int, first_name: str, username: Optional[str] = None) -> Dict[str, Any]:
+        async def _impl():
+            pool = await self._get_pool()
+            async with pool.acquire() as conn:
+                row = await conn.fetchrow("""
+                    INSERT INTO users (telegram_id, first_name)
+                    VALUES ($1, $2)
+                    ON CONFLICT (telegram_id) DO UPDATE
+                    SET first_name = EXCLUDED.first_name
+                    RETURNING *;
+                """, telegram_id, first_name)
+                return _format_row(row)
+        return self._run_async(_impl())
+
+    def accept_legal(self, telegram_id: int) -> Dict[str, Any]:
+        async def _impl():
+            pool = await self._get_pool()
+            now = datetime.now(timezone.utc)
+            async with pool.acquire() as conn:
+                row = await conn.fetchrow("""
+                    UPDATE users
+                    SET accepted_legal_at = $2
+                    WHERE telegram_id = $1
+                    RETURNING *;
+                """, telegram_id, now)
+                return _format_row(row)
+        return self._run_async(_impl())
+
+    def get_couple_by_id(self, couple_id: str) -> Optional[Dict[str, Any]]:
+        async def _impl():
+            pool = await self._get_pool()
+            c_uuid = uuid.UUID(couple_id)
+            async with pool.acquire() as conn:
+                row = await conn.fetchrow("SELECT * FROM couples WHERE id = $1;", c_uuid)
+                return _format_row(row)
+        return self._run_async(_impl())
+
+    def get_couple_by_invite(self, invite_code: str) -> Optional[Dict[str, Any]]:
+        async def _impl():
+            pool = await self._get_pool()
+            norm_code = normalize_invite_code(invite_code)
+            async with pool.acquire() as conn:
+                row = await conn.fetchrow("SELECT * FROM couples WHERE invite_code = $1;", norm_code)
+                return _format_row(row)
+        return self._run_async(_impl())
+
+    def get_user_couple(self, telegram_id: int) -> Optional[Dict[str, Any]]:
+        async def _impl():
+            pool = await self._get_pool()
+            async with pool.acquire() as conn:
+                row = await conn.fetchrow("""
+                    SELECT * FROM couples
+                    WHERE partner_1_id = $1 OR partner_2_id = $1
+                    ORDER BY created_at DESC
+                    LIMIT 1;
+                """, telegram_id)
+                return _format_row(row)
+        return self._run_async(_impl())
+
+    def create_couple(self, partner_1_id: int, invite_code: str) -> Dict[str, Any]:
+        async def _impl():
+            pool = await self._get_pool()
+            norm_code = normalize_invite_code(invite_code)
+            async with pool.acquire() as conn:
+                async with conn.transaction():
+                    row = await conn.fetchrow("""
+                        INSERT INTO couples (partner_1_id, invite_code, free_sessions_left)
+                        VALUES ($1, $2, 3)
+                        RETURNING *;
+                    """, partner_1_id, norm_code)
+                    couple_data = _format_row(row)
+                    c_uuid = row["id"]
+                    await conn.execute("UPDATE users SET couple_id = $1 WHERE telegram_id = $2;", c_uuid, partner_1_id)
+                    return couple_data
+        return self._run_async(_impl())
+
+    def join_couple(self, couple_id: str, partner_2_id: int) -> Dict[str, Any]:
+        async def _impl():
+            pool = await self._get_pool()
+            c_uuid = uuid.UUID(couple_id)
+            async with pool.acquire() as conn:
+                async with conn.transaction():
+                    row = await conn.fetchrow("""
+                        UPDATE couples
+                        SET partner_2_id = $2
+                        WHERE id = $1
+                        RETURNING *;
+                    """, c_uuid, partner_2_id)
+                    await conn.execute("UPDATE users SET couple_id = $1 WHERE telegram_id = $2;", c_uuid, partner_2_id)
+                    return _format_row(row)
+        return self._run_async(_impl())
+
+    def update_mood(self, couple_id: str, is_partner_1: bool, mood: int) -> Dict[str, Any]:
+        async def _impl():
+            pool = await self._get_pool()
+            c_uuid = uuid.UUID(couple_id)
+            now = datetime.now(timezone.utc)
+            async with pool.acquire() as conn:
+                if is_partner_1:
+                    row = await conn.fetchrow("""
+                        UPDATE couples
+                        SET mood_p1 = $2, mood_updated_at_p1 = $3
+                        WHERE id = $1
+                        RETURNING *;
+                    """, c_uuid, mood, now)
+                else:
+                    row = await conn.fetchrow("""
+                        UPDATE couples
+                        SET mood_p2 = $2, mood_updated_at_p2 = $3
+                        WHERE id = $1
+                        RETURNING *;
+                    """, c_uuid, mood, now)
+                return _format_row(row)
+        return self._run_async(_impl())
+
+    def decrement_free_sessions(self, couple_id: str) -> None:
+        async def _impl():
+            pool = await self._get_pool()
+            c_uuid = uuid.UUID(couple_id)
+            async with pool.acquire() as conn:
+                await conn.execute("""
+                    UPDATE couples
+                    SET free_sessions_left = GREATEST(free_sessions_left - 1, 0)
+                    WHERE id = $1 AND free_sessions_left > 0;
+                """, c_uuid)
+        self._run_async(_impl())
+
+    def check_couple_access(self, couple: Dict[str, Any]) -> Tuple[bool, str]:
+        sub_until = couple.get("subscription_until")
+        if sub_until:
+            try:
+                sub_dt = datetime.fromisoformat(sub_until)
+                if sub_dt.tzinfo is None:
+                    sub_dt = sub_dt.replace(tzinfo=timezone.utc)
+                if sub_dt > datetime.now(timezone.utc):
+                    return True, "subscription"
+            except Exception:
+                pass
+        if couple.get("free_sessions_left", 0) > 0:
+            return True, "free_session"
+        return False, "no_access"
+
+    def add_free_sessions(self, couple_id: str, count: int) -> Dict[str, Any]:
+        async def _impl():
+            pool = await self._get_pool()
+            c_uuid = uuid.UUID(couple_id)
+            async with pool.acquire() as conn:
+                row = await conn.fetchrow("""
+                    UPDATE couples
+                    SET free_sessions_left = free_sessions_left + $2
+                    WHERE id = $1
+                    RETURNING *;
+                """, c_uuid, count)
+                return _format_row(row)
+        return self._run_async(_impl())
+
+    def get_active_session(self, couple_id: str) -> Optional[Dict[str, Any]]:
+        async def _impl():
+            pool = await self._get_pool()
+            c_uuid = uuid.UUID(couple_id)
+            async with pool.acquire() as conn:
+                row = await conn.fetchrow("""
+                    SELECT * FROM conflict_sessions
+                    WHERE couple_id = $1 AND status IN ('waiting_partner_2', 'processing', 'analyzing')
+                    ORDER BY created_at DESC
+                    LIMIT 1;
+                """, c_uuid)
+                return _format_row(row)
+        return self._run_async(_impl())
+
+    def get_session_by_id(self, session_id: str) -> Optional[Dict[str, Any]]:
+        async def _impl():
+            pool = await self._get_pool()
+            s_uuid = uuid.UUID(session_id)
+            async with pool.acquire() as conn:
+                row = await conn.fetchrow("SELECT * FROM conflict_sessions WHERE id = $1;", s_uuid)
+                return _format_row(row)
+        return self._run_async(_impl())
+
+    def create_conflict_session(self, couple_id: str, initiator_id: int) -> Dict[str, Any]:
+        async def _impl():
+            pool = await self._get_pool()
+            c_uuid = uuid.UUID(couple_id)
+            async with pool.acquire() as conn:
+                row = await conn.fetchrow("""
+                    INSERT INTO conflict_sessions (couple_id, initiator_id, status)
+                    VALUES ($1, $2, 'waiting_partner_2')
+                    RETURNING *;
+                """, c_uuid, initiator_id)
+                return _format_row(row)
+        return self._run_async(_impl())
+
+    def update_session_status(
+        self,
+        session_id: str,
+        status: str,
+        completed_at: Optional[str] = None,
+        risk_level: Optional[str] = None,
+    ) -> None:
+        async def _impl():
+            pool = await self._get_pool()
+            s_uuid = uuid.UUID(session_id)
+            c_at = datetime.fromisoformat(completed_at) if completed_at else None
+            async with pool.acquire() as conn:
+                if completed_at and risk_level:
+                    await conn.execute("""
+                        UPDATE conflict_sessions
+                        SET status = $2, completed_at = $3, risk_level = $4
+                        WHERE id = $1;
+                    """, s_uuid, status, c_at, risk_level)
+                elif completed_at:
+                    await conn.execute("""
+                        UPDATE conflict_sessions
+                        SET status = $2, completed_at = $3
+                        WHERE id = $1;
+                    """, s_uuid, status, c_at)
+                elif risk_level:
+                    await conn.execute("""
+                        UPDATE conflict_sessions
+                        SET status = $2, risk_level = $3
+                        WHERE id = $1;
+                    """, s_uuid, status, risk_level)
+                else:
+                    await conn.execute("UPDATE conflict_sessions SET status = $2 WHERE id = $1;", s_uuid, status)
+        self._run_async(_impl())
+
+    def claim_session_for_analysis(self, session_id: str) -> bool:
+        """
+        Атомарно переводит сессию в статус 'processing' через WHERE-фильтр.
+        Предотвращает двойную параллельную обработку при состоянии гонки (C4).
+        """
+        async def _impl() -> bool:
+            pool = await self._get_pool()
+            s_uuid = uuid.UUID(session_id)
+            async with pool.acquire() as conn:
+                row = await conn.fetchrow("""
+                    UPDATE conflict_sessions
+                    SET status = 'processing'
+                    WHERE id = $1 AND status NOT IN ('processing', 'analyzing', 'completed', 'failed', 'expired', 'purged_by_retention')
+                    RETURNING id;
+                """, s_uuid)
+                return row is not None
+        return self._run_async(_impl())
+
+    def save_analysis_results(
+        self,
+        session_id: str,
+        results: Dict[str, Any],
+        risk_level: str,
+        completed_at: str,
+    ) -> None:
+        async def _impl():
+            pool = await self._get_pool()
+            s_uuid = uuid.UUID(session_id)
+            c_at = datetime.fromisoformat(completed_at)
+            p1_json = json.dumps(results.get("partner_1_response"))
+            p2_json = json.dumps(results.get("partner_2_response"))
+            shared_json = json.dumps(results.get("shared_summary"))
+
+            async with pool.acquire() as conn:
+                async with conn.transaction():
+                    await conn.execute("""
+                        UPDATE conflict_sessions
+                        SET status = 'completed',
+                            completed_at = $2,
+                            risk_level = $3,
+                            ai_advice_p1 = $4::jsonb,
+                            ai_advice_p2 = $5::jsonb,
+                            shared_summary = $6::jsonb
+                        WHERE id = $1;
+                    """, s_uuid, c_at, risk_level, p1_json, p2_json, shared_json)
+
+                    # Безвозвратно удаляем временные зашифрованные исходники
+                    await conn.execute("DELETE FROM pending_inputs WHERE session_id = $1;", s_uuid)
+        self._run_async(_impl())
+
+    def get_expired_sessions(self) -> List[Dict[str, Any]]:
+        async def _impl():
+            pool = await self._get_pool()
+            cutoff = datetime.now(timezone.utc) - timedelta(hours=getattr(settings, "EXPIRATION_HOURS", 48))
+            async with pool.acquire() as conn:
+                rows = await conn.fetch("""
+                    SELECT * FROM conflict_sessions
+                    WHERE status IN ('waiting_partner_2', 'processing', 'analyzing')
+                      AND created_at <= $1;
+                """, cutoff)
+                return _format_rows(rows)
+        return self._run_async(_impl())
+
+    def expire_session(self, session_id: str) -> None:
+        async def _impl():
+            pool = await self._get_pool()
+            s_uuid = uuid.UUID(session_id)
+            now = datetime.now(timezone.utc)
+            async with pool.acquire() as conn:
+                async with conn.transaction():
+                    await conn.execute("""
+                        UPDATE conflict_sessions
+                        SET status = 'expired', completed_at = $2
+                        WHERE id = $1;
+                    """, s_uuid, now)
+                    await conn.execute("DELETE FROM pending_inputs WHERE session_id = $1;", s_uuid)
+        self._run_async(_impl())
+
+    def save_pending_input(
+        self,
+        session_id: str,
+        author_telegram_id: int,
+        kind: str,
+        payload_encrypted: bytes,
+    ) -> Dict[str, Any]:
+        async def _impl():
+            pool = await self._get_pool()
+            s_uuid = uuid.UUID(session_id)
+            expires_at = datetime.now(timezone.utc) + timedelta(hours=getattr(settings, "RAW_INPUT_TTL_HOURS", 48))
+            async with pool.acquire() as conn:
+                row = await conn.fetchrow("""
+                    INSERT INTO pending_inputs (session_id, author_telegram_id, kind, payload_encrypted, expires_at)
+                    VALUES ($1, $2, $3, $4, $5)
+                    RETURNING *;
+                """, s_uuid, author_telegram_id, kind, payload_encrypted, expires_at)
+                return _format_row(row)
+        return self._run_async(_impl())
+
+    def has_user_submitted_input(self, session_id: str, author_telegram_id: int) -> bool:
+        async def _impl():
+            pool = await self._get_pool()
+            s_uuid = uuid.UUID(session_id)
+            async with pool.acquire() as conn:
+                row = await conn.fetchrow("""
+                    SELECT 1 FROM pending_inputs
+                    WHERE session_id = $1 AND author_telegram_id = $2
+                    LIMIT 1;
+                """, s_uuid, author_telegram_id)
+                return row is not None
+        return self._run_async(_impl())
+
+    def count_pending_inputs(self, session_id: str) -> int:
+        async def _impl():
+            pool = await self._get_pool()
+            s_uuid = uuid.UUID(session_id)
+            async with pool.acquire() as conn:
+                val = await conn.fetchval("SELECT count(*) FROM pending_inputs WHERE session_id = $1;", s_uuid)
+                return int(val or 0)
+        return self._run_async(_impl())
+
+    def get_pending_inputs(self, session_id: str) -> List[Dict[str, Any]]:
+        async def _impl():
+            pool = await self._get_pool()
+            s_uuid = uuid.UUID(session_id)
+            async with pool.acquire() as conn:
+                rows = await conn.fetch("SELECT * FROM pending_inputs WHERE session_id = $1;", s_uuid)
+                return _format_rows(rows)
+        return self._run_async(_impl())
+
+    def delete_pending_input_for_author(self, session_id: str, author_telegram_id: int) -> None:
+        async def _impl():
+            pool = await self._get_pool()
+            s_uuid = uuid.UUID(session_id)
+            async with pool.acquire() as conn:
+                await conn.execute("""
+                    DELETE FROM pending_inputs
+                    WHERE session_id = $1 AND author_telegram_id = $2;
+                """, s_uuid, author_telegram_id)
+        self._run_async(_impl())
+
+    def delete_pending_inputs_for_session(self, session_id: str) -> None:
+        async def _impl():
+            pool = await self._get_pool()
+            s_uuid = uuid.UUID(session_id)
+            async with pool.acquire() as conn:
+                await conn.execute("DELETE FROM pending_inputs WHERE session_id = $1;", s_uuid)
+        self._run_async(_impl())
+
+    def cleanup_expired_pending_inputs(self) -> int:
+        async def _impl():
+            pool = await self._get_pool()
+            async with pool.acquire() as conn:
+                val = await conn.fetchval("SELECT cleanup_expired_pending_inputs();")
+                return int(val or 0)
+        return self._run_async(_impl())
+
+    def delete_history(self, couple_id: str) -> None:
+        async def _impl():
+            pool = await self._get_pool()
+            c_uuid = uuid.UUID(couple_id)
+            async with pool.acquire() as conn:
+                async with conn.transaction():
+                    await conn.execute("""
+                        DELETE FROM pending_inputs
+                        WHERE session_id IN (SELECT id FROM conflict_sessions WHERE couple_id = $1);
+                    """, c_uuid)
+                    await conn.execute("DELETE FROM conflict_sessions WHERE couple_id = $1;", c_uuid)
+        self._run_async(_impl())
+
+    def purge_expired_data(self, days_retention: int = 30, hours_raw_ttl: int = 48) -> Dict[str, int]:
+        async def _impl():
+            pool = await self._get_pool()
+            async with pool.acquire() as conn:
+                val = await conn.fetchval("SELECT purge_expired_data($1, $2);", days_retention, hours_raw_ttl)
+                if isinstance(val, str):
+                    return json.loads(val)
+                elif isinstance(val, dict):
+                    return val
+                return {"purged_sessions": 0, "purged_inputs": 0}
+        return self._run_async(_impl())
+
+    def delete_couple_data(self, couple_id: str) -> None:
+        async def _impl():
+            pool = await self._get_pool()
+            c_uuid = uuid.UUID(couple_id)
+            async with pool.acquire() as conn:
+                async with conn.transaction():
+                    await conn.execute("SELECT delete_couple_data($1);", c_uuid)
+        self._run_async(_impl())
+
+    def save_payment(
+        self,
+        product: str,
+        amount: int,
+        currency: str,
+        provider_charge_id: str,
+        payer_hash: str,
+        couple_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        async def _impl():
+            pool = await self._get_pool()
+            c_uuid = uuid.UUID(couple_id) if couple_id else None
+            async with pool.acquire() as conn:
+                row = await conn.fetchrow("""
+                    INSERT INTO payments (product, amount, currency, provider_charge_id, payer_hash, couple_id)
+                    VALUES ($1, $2, $3, $4, $5, $6)
+                    RETURNING *;
+                """, product, amount, currency, provider_charge_id, payer_hash, c_uuid)
+                return _format_row(row)
+        return self._run_async(_impl())
+
+    def get_payments_by_payer_hash(self, payer_hash: str) -> List[Dict[str, Any]]:
+        async def _impl():
+            pool = await self._get_pool()
+            async with pool.acquire() as conn:
+                rows = await conn.fetch("SELECT * FROM payments WHERE payer_hash = $1 ORDER BY created_at DESC;", payer_hash)
+                return _format_rows(rows)
+        return self._run_async(_impl())
+
+    def get_all_couples(self) -> List[Dict[str, Any]]:
+        async def _impl():
+            pool = await self._get_pool()
+            async with pool.acquire() as conn:
+                rows = await conn.fetch("SELECT * FROM couples;")
+                return _format_rows(rows)
+        return self._run_async(_impl())
+
+    def get_admin_stats(self) -> Dict[str, Any]:
+        async def _impl():
+            pool = await self._get_pool()
+            async with pool.acquire() as conn:
+                total_couples = await conn.fetchval("SELECT count(*) FROM couples;")
+                total_sessions = await conn.fetchval("SELECT count(*) FROM conflict_sessions;")
+                completed_sessions = await conn.fetchval("SELECT count(*) FROM conflict_sessions WHERE status = 'completed';")
+                return {
+                    "total_couples": total_couples or 0,
+                    "total_sessions": total_sessions or 0,
+                    "completed_sessions": completed_sessions or 0,
+                }
+        return self._run_async(_impl())
+
+    def check_rate_limit(self, key: str, max_requests: int, window_seconds: int) -> Tuple[bool, int]:
+        return self.rate_limiter.check(key, max_requests, window_seconds)
+
+    def record_failed_invite_attempt(self, telegram_id: int) -> None:
+        self.rate_limiter.record_hit(f"invite_fail:{telegram_id}")
+
+    def check_invite_bruteforce(self, telegram_id: int) -> Tuple[bool, int]:
+        allowed, retry_after = self.rate_limiter.peek(f"invite_fail:{telegram_id}", max_requests=5, window_seconds=3600)
+        return (not allowed), retry_after
+
+    def reset_invite_bruteforce(self, telegram_id: int) -> None:
+        self.rate_limiter.reset(f"invite_fail:{telegram_id}")
+
+    def cleanup_rate_limits(self, max_age_seconds: int = 3600) -> int:
+        async def _impl():
+            pool = await self._get_pool()
+            cutoff = datetime.now(timezone.utc) - timedelta(seconds=max_age_seconds)
+            async with pool.acquire() as conn:
+                res = await conn.execute("DELETE FROM rate_limits WHERE window_start <= $1;", cutoff)
+                # res is like 'DELETE 5'
+                count = int(res.split()[1]) if len(res.split()) > 1 else 0
+                return count
+        return self._run_async(_impl())
+
+    def cleanup_expired_invites(self, ttl_hours: int = 48) -> int:
+        async def _impl():
+            pool = await self._get_pool()
+            cutoff = datetime.now(timezone.utc) - timedelta(hours=ttl_hours)
+            async with pool.acquire() as conn:
+                res = await conn.execute("""
+                    DELETE FROM couples
+                    WHERE partner_2_id IS NULL AND created_at <= $1;
+                """, cutoff)
+                count = int(res.split()[1]) if len(res.split()) > 1 else 0
+                return count
+        return self._run_async(_impl())
+
+    def cleanup_expired_payments(self, retention_years: int) -> int:
+        async def _impl():
+            pool = await self._get_pool()
+            cutoff = datetime.now(timezone.utc) - timedelta(days=365 * retention_years)
+            async with pool.acquire() as conn:
+                res = await conn.execute("DELETE FROM payments WHERE created_at <= $1;", cutoff)
+                count = int(res.split()[1]) if len(res.split()) > 1 else 0
+                return count
+        return self._run_async(_impl())
+
+    def try_advisory_lock(self, lock_id: int) -> bool:
+        async def _impl() -> bool:
+            if self._advisory_conn is not None:
+                return False
+            pool = await self._get_pool()
+            conn = await pool.acquire()
+            try:
+                val = await conn.fetchval("SELECT pg_try_advisory_lock($1);", lock_id)
+                if val:
+                    self._advisory_conn = conn
+                    self._advisory_lock_id = lock_id
+                    return True
+                else:
+                    await pool.release(conn)
+                    return False
+            except Exception:
+                await pool.release(conn)
+                return False
+        return self._run_async(_impl())
+
+    def release_advisory_lock(self, lock_id: int) -> bool:
+        async def _impl() -> bool:
+            if self._advisory_conn is None:
+                return False
+            conn = self._advisory_conn
+            self._advisory_conn = None
+            self._advisory_lock_id = None
+            pool = await self._get_pool()
+            try:
+                val = await conn.fetchval("SELECT pg_advisory_unlock($1);", lock_id)
+                return bool(val)
+            finally:
+                await pool.release(conn)
+        return self._run_async(_impl())
+
+

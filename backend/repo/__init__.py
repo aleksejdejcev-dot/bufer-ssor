@@ -1,26 +1,25 @@
 """
-Модуль репозитория: выбор и предоставление реализации хранилища данных.
+Модуль репозитория: выбор и предоставление активной реализации хранилища данных.
+В зависимости от конфигурации окружения инициализирует PostgresRepo или InMemoryRepo.
 """
 
-import os
 from typing import Optional
 from config import settings
 from repo.base import Repository
 from repo.in_memory_repo import InMemoryRepo
+from repo.postgres_repo import PostgresRepo
 
 _active_repo: Optional[Repository] = None
 
 
-def is_supabase_configured() -> bool:
-    url = settings.SUPABASE_URL
-    key = settings.SUPABASE_SERVICE_KEY
-    if not url or not key:
+def is_postgres_configured() -> bool:
+    url = settings.DATABASE_URL
+    if not url:
         return False
-    if "dummy" in url.lower() or "example" in url.lower() or "your_" in url.lower():
+    url_lower = url.lower()
+    if any(p in url_lower for p in ("dummy", "example", "placeholder", "your_")):
         return False
-    if "dummy" in key.lower() or "example" in key.lower() or "your_" in key.lower():
-        return False
-    return True
+    return url.startswith("postgresql://") or url.startswith("postgres://")
 
 
 def get_repo() -> Repository:
@@ -28,14 +27,13 @@ def get_repo() -> Repository:
     if _active_repo is not None:
         return _active_repo
 
-    if not is_supabase_configured():
-        _active_repo = InMemoryRepo()
-    else:
+    if is_postgres_configured():
         try:
-            from repo.supabase_repo import SupabaseRepo
-            _active_repo = SupabaseRepo()
+            _active_repo = PostgresRepo(database_url=settings.DATABASE_URL)
         except Exception:
             _active_repo = InMemoryRepo()
+    else:
+        _active_repo = InMemoryRepo()
 
     return _active_repo
 

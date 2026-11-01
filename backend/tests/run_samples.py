@@ -67,6 +67,8 @@ from ai_service import (
     generate_partner_card_with_ladder,
     generate_shared_summary_with_ladder,
     apply_fallback_to_field,
+)
+from analyzer_cache import (
     compute_analyzer_cache_key,
     load_analyzer_cache,
     save_analyzer_cache,
@@ -741,17 +743,144 @@ def compare_result_files(file1: Path, file2: Path) -> None:
     print("=" * 90 + "\n")
 
 
+def dry_validate(file_path: Path) -> Tuple[Dict[str, Any], List[str]]:
+    """
+    Валидация уже сохраненного JSON-отчета без обращения к LLM и сети (Блок F).
+    Проверяет структуру, валидаторы карточек, общих итогов, ритуалов, скриптов,
+    и вычисляет сводные метрики качества.
+    """
+    if not file_path.exists():
+        print(f"❌ Файл для dry-validate не найден: {file_path}")
+        sys.exit(1)
+
+    with open(file_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    if not isinstance(data, list):
+        print(f"❌ Ошибка: ожидался список результатов кейсов, получено {type(data)}")
+        sys.exit(1)
+
+    print("\n" + "=" * 80)
+    print(f"🔍 DRY-VALIDATE: Валидация сохраненных результатов")
+    print(f"Файл: {file_path.name} | Всего кейсов в отчете: {len(data)}")
+    print("=" * 80)
+
+    all_errors: List[str] = []
+    for item in data:
+        s_id = item.get("id", "unknown")
+        name = item.get("name", "")
+        print(f"\nКейс {s_id}: {name}")
+
+        if "error" in item:
+            err = f"Кейс {s_id} содержит ошибку выполнения: {item['error']}"
+            all_errors.append(err)
+            print(f"  ❌ {err}")
+            continue
+
+        mediator_out = item.get("mediator_output", {})
+        risk_level = mediator_out.get("risk_level", item.get("actual_risk", "normal"))
+
+        # Для кейсов normal/elevated валидируем схемы и правила
+        if risk_level != "high":
+            p1_resp = mediator_out.get("partner_1_response")
+            p2_resp = mediator_out.get("partner_2_response")
+            sh_resp = mediator_out.get("shared_summary")
+
+            if p1_resp:
+                try:
+                    p1_obj = PartnerResponse(**p1_resp)
+                    p1_errs = validate_partner_card(p1_obj)
+                    all_errors.extend([f"[{s_id} P1] {e}" for e in p1_errs])
+                except Exception as ex:
+                    all_errors.append(f"[{s_id} P1 Schema] {ex}")
+
+            if p2_resp:
+                try:
+                    p2_obj = PartnerResponse(**p2_resp)
+                    p2_errs = validate_partner_card(p2_obj)
+                    all_errors.extend([f"[{s_id} P2] {e}" for e in p2_errs])
+                except Exception as ex:
+                    all_errors.append(f"[{s_id} P2 Schema] {ex}")
+
+            if sh_resp:
+                try:
+                    sh_obj = SharedSummary(**sh_resp)
+                    sh_errs = validate_shared_summary(sh_obj)
+                    all_errors.extend([f"[{s_id} Shared] {e}" for e in sh_errs])
+                except Exception as ex:
+                    all_errors.append(f"[{s_id} Shared Schema] {ex}")
+
+            # Проверка консистентности ритуала
+            if p1_resp and p2_resp:
+                s1 = p1_resp.get("action_scripts", [])
+                s2 = p2_resp.get("action_scripts", [])
+                try:
+                    s1_objs = [ActionScriptItem(**s) for s in s1]
+                    s2_objs = [ActionScriptItem(**s) for s in s2]
+                    rit_errs = validate_ritual_consistency(s1_objs, s2_objs)
+                    all_errors.extend([f"[{s_id} Ritual] {e}" for e in rit_errs])
+                except Exception:
+                    pass
+
+        # Ошибки, зафиксированные при прогоне
+        recorded_errs = item.get("errors", [])
+        if recorded_errs:
+            for re_err in recorded_errs:
+                tag = f"[{s_id} Recorded] {re_err}"
+                if tag not in all_errors:
+                    all_errors.append(tag)
+
+        case_errors = [e for e in all_errors if f"[{s_id}" in e]
+        if case_errors:
+            print(f"  ⚠️ Замечания ({len(case_errors)}):")
+            for ce in case_errors[:3]:
+                print(f"    - {ce}")
+            if len(case_errors) > 3:
+                print(f"    ... и еще {len(case_errors) - 3}")
+        else:
+            print(f"  ✅ Валидация пройдена без замечаний")
+
+    metrics = compute_metrics(data)
+    print("\n" + "=" * 80)
+    print(f"📊 МЕТРИКИ ФАЙЛА {file_path.name}:")
+    print(f"• Всего кейсов: {metrics.get('total_cases', 0)}")
+    print(f"• Успешных карточек: {metrics.get('successful_cards', 0)}")
+    print(f"• Высокий риск / Блокировка: {metrics.get('high_risk_cases', 0)} (отказов: {metrics.get('blocked_cases', 0)})")
+    print(f"• Кейсов с фоллбэками: {metrics.get('cases_with_fallbacks', 0)}")
+    print(f"• Срабатываний Leak Guard: {metrics.get('leak_guard_triggers', 0)}")
+    print(f"• Всего токенов: {metrics.get('total_tokens', 0):,} (в среднем: {metrics.get('avg_tokens', 0):.0f})")
+    print(f"• Среднее число API-вызовов: {metrics.get('avg_calls', 0):.1f}")
+    print(f"• Доля смягчителей в partner_perspective: {metrics.get('softener_rate', 0):.1f}%")
+    print(f"• Несовпадение ритуала: {metrics.get('ritual_mismatch_rate', 0):.1f}%")
+    print(f"• Опечаток/неизвестных слов: {metrics.get('unknown_words_count', 0)}")
+    print("=" * 80)
+
+    if all_errors:
+        print(f"\n⚠️ ИТОГО замечаний валидатора: {len(all_errors)}")
+    else:
+        print(f"\n🎉 ВСЕ КЕЙСЫ В ФАЙЛЕ ПОЛНОСТЬЮ ВАЛИДНЫ!")
+
+    return metrics, all_errors
+
+
 async def main():
     parser = argparse.ArgumentParser(description="Запуск прогона синтетических ссор (Этап 3.5: GigaChat / Gemini)")
     parser.add_argument("--provider", type=str, default=None, help="LLM-провайдер: gigachat | gemini (по умолчанию из .env)")
     parser.add_argument("--model", type=str, default=None, help="Модель LLM (например GigaChat-3-Ultra, GigaChat-Pro, gemini-2.5-flash)")
     parser.add_argument("--limit", type=int, default=None, help="Ограничить количество кейсов")
     parser.add_argument("--cases", type=str, default=None, help="Выборочные кейсы через запятую, например '7,8,6,3'")
+    parser.add_argument("--runs", type=int, default=1, help="Количество повторных прогонов каждого кейса (по умолчанию 1)")
     parser.add_argument("--resume", action="store_true", help="Пропустить уже посчитанные кейсы")
     parser.add_argument("--sleep", type=float, default=0.0, help="Пауза между кейсами в секундах")
     parser.add_argument("--no-cache", action="store_true", help="Не использовать кэш Шага A")
     parser.add_argument("--compare", nargs="*", default=None, help="Сравнение файлов: --compare file1.json file2.json (или сохранить out_<provider>_<model>_<ts>.json)")
+    parser.add_argument("--dry-validate", type=str, default=None, help="Проверить уже сохранённый JSON без обращений к ИИ")
     args = parser.parse_args()
+
+    # Режим dry-validate (без обращения к сети и ИИ)
+    if args.dry_validate:
+        dry_validate(Path(args.dry_validate))
+        return
 
     # Режим сравнения двух файлов
     if args.compare and len(args.compare) == 2:
@@ -796,6 +925,17 @@ async def main():
 
     if args.limit:
         samples = samples[: args.limit]
+
+    if args.runs > 1:
+        expanded_samples = []
+        for r_num in range(1, args.runs + 1):
+            for s in samples:
+                s_copy = dict(s)
+                s_copy["id"] = f"{s['id']}_run{r_num}"
+                s_copy["name"] = f"{s['name']} (прогон {r_num}/{args.runs})"
+                expanded_samples.append(s_copy)
+        samples = expanded_samples
+        print(f"🔁 Количество прогонов (--runs): {args.runs}. Всего запусков: {len(samples)}")
 
     latest_out = Path(__file__).resolve().parent / "samples_results.json"
     resumed_dict: Dict[str, Dict[str, Any]] = {}

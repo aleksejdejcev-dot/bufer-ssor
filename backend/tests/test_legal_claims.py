@@ -21,7 +21,8 @@ def test_no_forbidden_legal_claims_in_codebase():
         ROOT_DIR / "README.md",
         ROOT_DIR / "backend",
         ROOT_DIR / "frontend" / "src",
-        ROOT_DIR / "supabase",
+        ROOT_DIR / "db",
+        ROOT_DIR / "docs",
     ]
 
     violations = []
@@ -63,6 +64,5 @@ def test_readme_contains_factual_statements():
     readme_file = ROOT_DIR / "README.md"
     assert readme_file.exists()
     content = readme_file.read_text(encoding="utf-8")
-    assert "AWS eu-central" in content
-    assert "не РФ" in content
+    assert "[провайдер, регион: заполняет владелец]" in content
     assert "Юридический аудит проекта не проводился" in content

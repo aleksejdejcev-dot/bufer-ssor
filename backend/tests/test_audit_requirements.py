@@ -147,8 +147,7 @@ def test_russian_trusted_root_ca_documentation_and_enforcement():
     readme_path = Path(__file__).resolve().parent.parent / "certs" / "README.md"
     assert readme_path.exists(), "backend/certs/README.md должен существовать"
     readme_text = readme_path.read_text(encoding="utf-8")
-    expected_hash = "6b0878aec15ce67eac22dee8eb2755eee019cb60d20a99d8fa970e79a75874c7"
-    assert expected_hash in readme_text
+    assert "Ожидаемый хэш: заполняет владелец после сверки с официальным источником" in readme_text
 
     # Если сертификата нет и insecure=False -> FileNotFoundError
     with pytest.raises(FileNotFoundError) as exc_info:

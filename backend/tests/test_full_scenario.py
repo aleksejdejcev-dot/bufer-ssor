@@ -32,8 +32,7 @@ TEST_BOT_TOKEN = "123456789:TEST_BOT_TOKEN_FOR_UNITTESTS_XYZ"
 TEST_WEBHOOK_SECRET = "test_webhook_secret_1234567890abcdef"
 
 os.environ["INPUT_ENCRYPTION_KEY"] = TEST_FERNET_KEY
-os.environ["SUPABASE_URL"] = "https://dummy.supabase.co"
-os.environ["SUPABASE_SERVICE_KEY"] = "dummy_service_key"
+os.environ["DATABASE_URL"] = "postgresql://buffer_admin:test_password@127.0.0.1:5432/buffer_ssor_test"
 os.environ["TELEGRAM_BOT_TOKEN"] = TEST_BOT_TOKEN
 os.environ["TELEGRAM_WEBHOOK_SECRET"] = TEST_WEBHOOK_SECRET
 os.environ["WEBHOOK_BASE_URL"] = "https://test.ngrok.app"
@@ -69,7 +68,7 @@ def make_valid_init_data(telegram_id: int, first_name: str, auth_date_offset: in
 
 
 # ==============================================================================
-# In-Memory хранилище для эмуляции БД Supabase во время тестов
+# In-Memory хранилище для эмуляции БД во время тестов
 # ==============================================================================
 
 class InMemoryDB:

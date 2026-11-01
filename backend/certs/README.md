@@ -12,10 +12,7 @@
 - **Официальный источник**: [Единый портал государственных услуг (Госуслуги)](https://www.gosuslugi.ru/crt)
 - **Прямая ссылка**: `https://gu-st.ru/content/Other/doc/russian_trusted_root_ca.pem`
 - **Алгоритм хеширования**: SHA-256
-- **Хеш-сумма (SHA-256)**:
-  ```
-  6b0878aec15ce67eac22dee8eb2755eee019cb60d20a99d8fa970e79a75874c7
-  ```
+- **Ожидаемый хэш: заполняет владелец после сверки с официальным источником**
 
 ---
 
@@ -25,20 +22,21 @@
 
 ```bash
 # macOS
+shasum -a 256 certs/russian_trusted_root_ca.pem
+# или
 shasum -a 256 backend/certs/russian_trusted_root_ca.pem
 
 # Linux
-sha256sum backend/certs/russian_trusted_root_ca.pem
+sha256sum certs/russian_trusted_root_ca.pem
 ```
 
-Вывод должен в точности совпадать с эталонным хешем:
-`6b0878aec15ce67eac22dee8eb2755eee019cb60d20a99d8fa970e79a75874c7`.
+Вывод команды должен совпадать со значением хэша, опубликованным на официальном портале Госуслуг.
 
 ---
 
-## Обновление сертификата
+## Скачивание и обновление сертификата
 
-Если файл отсутствует или истёк срок действия сертификата:
+Если файл отсутствует или обновляется:
 ```bash
 curl -k -o backend/certs/russian_trusted_root_ca.pem https://gu-st.ru/content/Other/doc/russian_trusted_root_ca.pem
 shasum -a 256 backend/certs/russian_trusted_root_ca.pem

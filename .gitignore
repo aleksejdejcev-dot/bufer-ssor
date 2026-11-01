@@ -4,6 +4,18 @@
 !.env.example
 *.env
 
+# Caches and virtual environments
+.venv/
+.venv
+.pytest_cache/
+.pytest_cache
+.mypy_cache/
+.mypy_cache
+.ruff_cache/
+.ruff_cache
+pgdata/
+*.log
+
 # Tests and caches
 backend/tests/.cache/
 tests/.cache/
@@ -24,7 +36,6 @@ __pycache__/
 .Python
 env/
 venv/
-.venv/
 ENV/
 build/
 develop-eggs/
@@ -36,12 +47,10 @@ lib/
 lib64/
 parts/
 sdist/
-var/
 wheels/
 *.egg-info/
 .installed.cfg
 *.egg
-.pytest_cache/
 .coverage
 htmlcov/
 

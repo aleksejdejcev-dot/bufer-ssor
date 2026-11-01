@@ -8,6 +8,9 @@
 """
 
 import logging
+import hashlib
+import hmac
+from typing import Optional
 from cryptography.fernet import Fernet, InvalidToken
 from config import settings
 
@@ -68,3 +71,13 @@ def decrypt_text(token: bytes) -> str:
     """
     raw_bytes = decrypt_bytes(token)
     return raw_bytes.decode("utf-8", errors="replace")
+
+
+def generate_payer_hash(telegram_id: int, secret_salt: Optional[str] = None) -> str:
+    """Генерирует необратимый HMAC-SHA256 псевдоним плательщика."""
+    salt = (secret_salt or getattr(settings, "PAYMENT_HASH_KEY", "buffer_secret_salt") or "buffer_secret_salt").encode("utf-8")
+    return hmac.new(salt, str(telegram_id).encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+hash_payer_id = generate_payer_hash
+

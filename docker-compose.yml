@@ -1,0 +1,16 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: buffer_ssor_postgres
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5432:5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?задай в .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?задай в .env}
+      POSTGRES_DB: ${POSTGRES_DB:?задай в .env}
+      MIGRATOR_PASSWORD: ${MIGRATOR_PASSWORD:?задай в .env}
+      APP_USER_PASSWORD: ${APP_USER_PASSWORD:?задай в .env}
+    volumes:
+      - ./pgdata:/var/lib/postgresql/data
+      - ./scripts/init_postgres.sh:/docker-entrypoint-initdb.d/init_postgres.sh:ro

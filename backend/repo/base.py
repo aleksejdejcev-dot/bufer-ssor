@@ -61,6 +61,13 @@ class Repository(Protocol):
     ) -> None:
         ...
 
+    def claim_session_for_analysis(self, session_id: str) -> bool:
+        """
+        Атомарно пытается перевести сессию в статус 'processing' для выполнения разбора.
+        Возвращает True при успешном захвате, False если сессия уже обрабатывается или завершена.
+        """
+        ...
+
     def save_analysis_results(
         self,
         session_id: str,
@@ -147,6 +154,22 @@ class Repository(Protocol):
 
     def check_rate_limit(self, key: str, max_requests: int, window_seconds: int) -> Tuple[bool, int]:
         ...
+
+    def cleanup_rate_limits(self, max_age_seconds: int = 3600) -> int:
+        ...
+
+    def cleanup_expired_invites(self, ttl_hours: int = 48) -> int:
+        ...
+
+    def cleanup_expired_payments(self, retention_years: int) -> int:
+        ...
+
+    def try_advisory_lock(self, lock_id: int) -> bool:
+        ...
+
+    def release_advisory_lock(self, lock_id: int) -> bool:
+        ...
+
 
     def record_failed_invite_attempt(self, telegram_id: int) -> None:
         ...
