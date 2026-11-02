@@ -10,12 +10,14 @@
 """
 
 import io
+import os
 import logging
 import asyncio
 from datetime import datetime, timezone
 from typing import Optional, Dict
 
 from aiogram import Bot, Dispatcher, Router, F
+from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.filters import CommandStart, CommandObject, Command
 from aiogram.types import (
     Message,
@@ -37,7 +39,45 @@ logger = logging.getLogger(__name__)
 bot_token = settings.TELEGRAM_BOT_TOKEN
 if not bot_token or ":" not in bot_token:
     bot_token = "123456789:dummy_token_placeholder_for_tests_35c"
-bot = Bot(token=bot_token)
+
+
+def _get_telegram_proxy() -> Optional[str]:
+    proxy = getattr(settings, "TELEGRAM_PROXY", None) or os.getenv("TELEGRAM_PROXY")
+    if proxy and proxy.strip():
+        return proxy.strip()
+    proxy = getattr(settings, "HTTPS_PROXY", None) or os.getenv("HTTPS_PROXY")
+    if proxy and proxy.strip():
+        return proxy.strip()
+    proxy = getattr(settings, "HTTP_PROXY", None) or os.getenv("HTTP_PROXY")
+    if proxy and proxy.strip():
+        return proxy.strip()
+    return None
+
+
+def _resolve_proxy_for_env(proxy_url: Optional[str]) -> Optional[str]:
+    if not proxy_url:
+        return None
+    # Внутри Docker-контейнера loopback-прокси на 127.0.0.1 хоста доступен через host.docker.internal
+    if os.path.exists("/.dockerenv") and ("127.0.0.1" in proxy_url or "localhost" in proxy_url):
+        try:
+            import socket
+            socket.gethostbyname("host.docker.internal")
+            resolved = proxy_url.replace("127.0.0.1", "host.docker.internal").replace("localhost", "host.docker.internal")
+            logger.info("Docker container proxy resolved to host gateway: %s", resolved)
+            return resolved
+        except Exception:
+            pass
+    return proxy_url
+
+
+telegram_proxy = _resolve_proxy_for_env(_get_telegram_proxy())
+if telegram_proxy:
+    session = AiohttpSession(proxy=telegram_proxy, timeout=15.0)
+    bot = Bot(token=bot_token, session=session)
+    logger.info("Aiogram Bot initialized with proxy: %s", telegram_proxy)
+else:
+    session = AiohttpSession(timeout=15.0)
+    bot = Bot(token=bot_token, session=session)
 dp = Dispatcher()
 router = Router()
 dp.include_router(router)

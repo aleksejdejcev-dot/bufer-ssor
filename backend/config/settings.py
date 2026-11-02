@@ -29,6 +29,7 @@ class Settings(BaseSettings):
     TELEGRAM_BOT_TOKEN: str = ""
     TELEGRAM_WEBHOOK_SECRET: str = ""
     WEBHOOK_BASE_URL: str = ""
+    TELEGRAM_PROXY: Optional[str] = None
 
     # Выбор LLM-провайдера (gigachat | gemini)
     LLM_PROVIDER: str = "gigachat"
@@ -132,7 +133,7 @@ def validate_production_security(s: Settings) -> None:
         if s.DATABASE_URL:
             import urllib.parse
             parsed_db = urllib.parse.urlparse(s.DATABASE_URL)
-            is_local = parsed_db.hostname in ("localhost", "127.0.0.1")
+            is_local = parsed_db.hostname in ("localhost", "127.0.0.1", "postgres", "host.docker.internal")
 
             # D2: disable допустим только для локального Docker; в production (на удаленном хосте) допустимы require, verify-ca, verify-full
             if is_local:

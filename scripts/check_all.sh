@@ -55,6 +55,7 @@ import uvicorn
 import pydantic
 import pydantic_settings
 import aiogram
+import aiohttp_socks
 import cryptography
 import google.genai
 import python_multipart

@@ -14,3 +14,20 @@ services:
     volumes:
       - ./pgdata:/var/lib/postgresql/data
       - ./scripts/init_postgres.sh:/docker-entrypoint-initdb.d/init_postgres.sh:ro
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: buffer_ssor_backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-buffer_admin}:${POSTGRES_PASSWORD:-buffer_dev_pass}@postgres:5432/${POSTGRES_DB:-buffer_ssor}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - postgres

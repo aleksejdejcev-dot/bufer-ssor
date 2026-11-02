@@ -20,7 +20,7 @@ RUN pip install --no-cache-dir --upgrade pip && \
 
 # Копирование исходного кода бэкенда и доверенных сертификатов
 COPY backend/ /app/backend/
-COPY certs/ /app/certs/
+COPY backend/certs/ /app/certs/
 
 # Назначение прав пользователю appuser
 RUN chown -R appuser:appgroup /app

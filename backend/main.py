@@ -99,46 +99,103 @@ mood_limiter = InMemoryRateLimiter(max_requests=15, window_seconds=60)          
 
 
 # ==============================================================================
+# Фоновый воркер взаимодействия с Telegram Bot API
+# ==============================================================================
+
+async def _telegram_startup_worker():
+    """
+    Фоновый воркер подключения к Telegram Bot API и настройки вебхука/polling.
+    Работает асинхронно, не блокируя запуск HTTP-сервера FastAPI (lifespan).
+    При сбоях сети или недоступности api.telegram.org выполняет повторные попытки с backoff.
+    Никогда не вызывает sys.exit() и не прерывает работу основного сервиса.
+    """
+    global bot_username_cache
+    webhook_base = (settings.WEBHOOK_BASE_URL or "").strip().lower()
+    is_polling = webhook_base in ("polling", "", "none") or "test.ngrok.app" in webhook_base
+
+    # 1. Попытка получить информацию о боте (get_me) с ретраями
+    backoff = 3
+    max_backoff = 60
+    while True:
+        try:
+            bot_info = await asyncio.wait_for(bot.get_me(), timeout=10.0)
+            bot_username_cache = bot_info.username
+            logger.info("Telegram bot initialized successfully: @%s", bot_username_cache)
+            break
+        except asyncio.CancelledError:
+            logger.info("Telegram startup worker cancelled during get_me")
+            return
+        except Exception as e:
+            err_msg = str(e)
+            if "unauthorized" in err_msg.lower():
+                logger.error(
+                    "Telegram bot token unauthorized: %s. Please check TELEGRAM_BOT_TOKEN in .env",
+                    e,
+                )
+                try:
+                    await asyncio.sleep(60)
+                except asyncio.CancelledError:
+                    return
+                continue
+            logger.warning("Failed to fetch bot info (%s). Retrying in %ds...", e, backoff)
+            try:
+                await asyncio.sleep(backoff)
+            except asyncio.CancelledError:
+                return
+            backoff = min(backoff * 2, max_backoff)
+
+    # 2. Настройка Webhook или Polling
+    if is_polling:
+        logger.info("Configuring Telegram bot in Long Polling mode...")
+        while True:
+            try:
+                await asyncio.wait_for(bot.delete_webhook(drop_pending_updates=False), timeout=10.0)
+                logger.info("Telegram webhook removed, starting long polling...")
+                await dp.start_polling(bot, allowed_updates=["message", "callback_query"])
+                break
+            except asyncio.CancelledError:
+                logger.info("Telegram polling cancelled")
+                break
+            except Exception as e:
+                logger.warning("Failed during Telegram polling start (%s). Retrying in 5s...", e)
+                try:
+                    await asyncio.sleep(5)
+                except asyncio.CancelledError:
+                    break
+    else:
+        webhook_url = f"{settings.WEBHOOK_BASE_URL.rstrip('/')}/api/webhook"
+        logger.info("Configuring Telegram webhook for URL: %s", webhook_url)
+        while True:
+            try:
+                await asyncio.wait_for(
+                    bot.set_webhook(
+                        url=webhook_url,
+                        secret_token=settings.TELEGRAM_WEBHOOK_SECRET,
+                        allowed_updates=["message", "callback_query"],
+                        drop_pending_updates=False,
+                    ),
+                    timeout=10.0,
+                )
+                logger.info("Telegram webhook configured successfully: %s", webhook_url)
+                break
+            except asyncio.CancelledError:
+                logger.info("Telegram webhook setup cancelled")
+                break
+            except Exception as e:
+                logger.warning("Failed to set Telegram webhook (%s). Retrying in 10s...", e)
+                try:
+                    await asyncio.sleep(10)
+                except asyncio.CancelledError:
+                    break
+
+
+# ==============================================================================
 # Жизненный цикл приложения (Lifespan)
 # ==============================================================================
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global bot_username_cache
-
-    # 1. Получаем инфо о боте
-    try:
-        bot_info = await bot.get_me()
-        bot_username_cache = bot_info.username
-        logger.info("Bot initialized: @%s", bot_username_cache)
-    except Exception as e:
-        logger.error("Failed to fetch bot info: %s", e)
-
-    # 2. Настраиваем доставку сообщений: Polling или Webhook
-    polling_task = None
-    webhook_base = (settings.WEBHOOK_BASE_URL or "").strip().lower()
-
-    if webhook_base in ("polling", "", "none") or "test.ngrok.app" in webhook_base:
-        try:
-            await bot.delete_webhook(drop_pending_updates=False)
-            polling_task = asyncio.create_task(dp.start_polling(bot, allowed_updates=["message", "callback_query"]))
-            logger.info("Telegram bot started in Long Polling mode (updates received directly from Telegram)!")
-        except Exception as e:
-            logger.error("Failed to start bot in polling mode: %s", e)
-    else:
-        webhook_url = f"{settings.WEBHOOK_BASE_URL.rstrip('/')}/api/webhook"
-        try:
-            await bot.set_webhook(
-                url=webhook_url,
-                secret_token=settings.TELEGRAM_WEBHOOK_SECRET,
-                allowed_updates=["message", "callback_query"],
-                drop_pending_updates=False,
-            )
-            logger.info("Telegram webhook configured: %s", webhook_url)
-        except Exception as e:
-            logger.error("Failed to set webhook: %s", e)
-
-    # 3. Запускаем фоновый планировщик очистки данных (Retention Scheduler с pg_try_advisory_lock)
+    # 1. Запускаем фоновый планировщик очистки данных (Retention Scheduler с pg_try_advisory_lock)
     retention_interval = getattr(settings, "RETENTION_INTERVAL_SECONDS", 3600)
     retention_task = asyncio.create_task(
         retention_worker_loop(
@@ -149,22 +206,24 @@ async def lifespan(app: FastAPI):
         )
     )
 
+    # 2. Запускаем неблокирующий фоновый воркер взаимодействия с Telegram
+    telegram_task = asyncio.create_task(_telegram_startup_worker())
+
+    # Мгновенно передаем управление Uvicorn для открытия HTTP-порта 8000
     yield
 
-    # Корректное завершение
-    if polling_task:
-        polling_task.cancel()
-        try:
-            await polling_task
-        except asyncio.CancelledError:
-            pass
-
+    # Корректное завершение фоновых задач
+    telegram_task.cancel()
     retention_task.cancel()
     try:
-        await retention_task
-    except asyncio.CancelledError:
+        await asyncio.gather(telegram_task, retention_task, return_exceptions=True)
+    except Exception:
         pass
-    await bot.session.close()
+
+    try:
+        await bot.session.close()
+    except Exception:
+        pass
     logger.info("App shutdown complete")
 
 
@@ -369,6 +428,31 @@ async def telegram_webhook(
     except Exception as e:
         logger.error("Error processing telegram webhook update: %s", e)
         return {"ok": False}
+
+
+@app.post("/api/telegram/setup-webhook")
+async def setup_telegram_webhook_endpoint(
+    secret_token: Optional[str] = Header(None, alias="X-Telegram-Bot-Api-Secret-Token"),
+):
+    """Принудительная настройка или обновление вебхука Telegram."""
+    if secret_token != settings.TELEGRAM_WEBHOOK_SECRET:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid webhook secret")
+
+    webhook_url = f"{settings.WEBHOOK_BASE_URL.rstrip('/')}/api/webhook"
+    try:
+        await asyncio.wait_for(
+            bot.set_webhook(
+                url=webhook_url,
+                secret_token=settings.TELEGRAM_WEBHOOK_SECRET,
+                allowed_updates=["message", "callback_query"],
+                drop_pending_updates=False,
+            ),
+            timeout=10.0,
+        )
+        return {"status": "ok", "webhook_url": webhook_url}
+    except Exception as e:
+        logger.error("Failed to set webhook manually: %s", e)
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(e))
 
 
 @app.post("/api/webhook/yookassa")
