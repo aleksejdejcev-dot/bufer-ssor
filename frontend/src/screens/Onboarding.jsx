@@ -174,7 +174,7 @@ export default function Onboarding({ onAccepted, initialCouple }) {
                 ИИ выслушает каждого наедине
               </div>
               <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 leading-relaxed">
-                Партнёр никогда не увидит и не услышит ваши исходные слова и формулировки.
+                Партнёр никогда не увидит ваши исходные слова и формулировки.
               </div>
             </div>
           </div>
@@ -188,7 +188,7 @@ export default function Onboarding({ onAccepted, initialCouple }) {
                 Исходники удаляются
               </div>
               <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 leading-relaxed">
-                Все тексты и голосовые сообщения безвозвратно стираются сразу после анализа.
+                Все исходные сообщения безвозвратно стираются сразу после анализа.
               </div>
             </div>
           </div>

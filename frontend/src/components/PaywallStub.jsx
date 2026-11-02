@@ -61,7 +61,7 @@ export default function PaywallStub({ onBack }) {
             Оформите подписку для пары
           </h2>
           <p className="mt-2 text-xs sm:text-sm text-slate-500 dark:text-slate-400 leading-relaxed max-w-xs mx-auto">
-            Один тариф на двоих: безлимитные медиации, разбор голосовых сообщений и забота о ваших отношениях.
+            Один тариф на двоих: безлимитные медиации, персональный ИИ-анализ и забота о ваших отношениях.
           </p>
         </div>
 
@@ -85,7 +85,7 @@ export default function PaywallStub({ onBack }) {
               <Check size={13} />
             </div>
             <div className="text-xs text-slate-600 dark:text-slate-300">
-              <span className="font-medium text-slate-900 dark:text-slate-100">Голосовые сообщения</span> — рассказывайте ситуацию голосом без ограничений.
+              <span className="font-medium text-slate-900 dark:text-slate-100">Персональные шаги примирения</span> — конкретные фразы и действия для спокойного выхода из конфликта.
             </div>
           </div>
 

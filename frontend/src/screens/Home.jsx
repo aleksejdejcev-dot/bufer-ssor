@@ -205,7 +205,7 @@ export default function Home({ meData, onStartSession, onOpenActiveSession, onRe
   return (
     <div className="min-h-screen flex flex-col justify-between p-4 sm:p-5 max-w-md mx-auto animate-fade-in bg-slate-50/50 dark:bg-zinc-950">
       <div className="space-y-4">
-        {/* Шапка: логотип и остаток бесплатных сессий */}
+        {/* Шапка: логотип и кнопка «Оформить Премиум» */}
         <div className="flex items-center justify-between pt-1">
           <div className="flex items-center gap-2.5">
             <img
@@ -224,21 +224,58 @@ export default function Home({ meData, onStartSession, onOpenActiveSession, onRe
           </div>
 
           {couple && (
+            /* Элемент 2: Отдельная кнопка / бейдж «Оформить Премиум» */
             <button
+              type="button"
               onClick={() => onPaywallRequired && onPaywallRequired()}
-              className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-100 hover:bg-slate-200/70 dark:bg-zinc-800/80 dark:hover:bg-zinc-700/80 text-xs text-slate-600 dark:text-slate-300 font-medium border border-slate-200/60 dark:border-zinc-700/60 transition-colors cursor-pointer"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 active:scale-[0.98] text-white text-xs font-semibold shadow-xs shadow-indigo-500/25 transition-all cursor-pointer"
             >
-              <Sparkles size={12} className="text-amber-500" />
+              <Sparkles size={13} className="text-amber-300 shrink-0" />
               <span>
                 {couple.subscription_until && new Date(couple.subscription_until) > new Date()
-                  ? 'Подписка активна'
-                  : couple.free_sessions_left > 0
-                  ? `Разборов: ${couple.free_sessions_left}`
-                  : 'Оформить подписку'}
+                  ? 'Премиум активен'
+                  : 'Оформить Премиум'}
               </span>
             </button>
           )}
         </div>
+
+        {/* Элемент 1: Индикатор лимита — аккуратная плашка с текстом «Бесплатных разборов: {count}» */}
+        {couple && (
+          <div
+            role="button"
+            tabIndex={0}
+            onClick={() => onPaywallRequired && onPaywallRequired()}
+            className="flex items-center justify-between px-3.5 py-2.5 rounded-xl bg-white dark:bg-zinc-900/90 hover:bg-slate-50 dark:hover:bg-zinc-800/80 border border-slate-200/80 dark:border-zinc-800 shadow-2xs transition-all cursor-pointer group"
+          >
+            <div className="flex items-center gap-2 text-xs">
+              <span
+                className={`w-2 h-2 rounded-full shrink-0 ${
+                  couple.subscription_until && new Date(couple.subscription_until) > new Date()
+                    ? 'bg-amber-400 animate-pulse'
+                    : (couple.free_sessions_left ?? 0) > 0
+                    ? 'bg-emerald-500'
+                    : 'bg-rose-500'
+                }`}
+              />
+              <span className="text-slate-600 dark:text-slate-300 font-medium">
+                {couple.subscription_until && new Date(couple.subscription_until) > new Date()
+                  ? 'Тариф пары:'
+                  : 'Бесплатных разборов:'}
+              </span>
+              <span className="font-bold text-slate-900 dark:text-slate-100">
+                {couple.subscription_until && new Date(couple.subscription_until) > new Date()
+                  ? 'Безлимит (Премиум)'
+                  : (couple.free_sessions_left ?? 0)}
+              </span>
+            </div>
+
+            <div className="flex items-center gap-1 text-[11px] font-medium text-indigo-600 dark:text-indigo-400 group-hover:underline">
+              <span>{couple.subscription_until && new Date(couple.subscription_until) > new Date() ? 'Условия' : 'Пополнить'}</span>
+              <span aria-hidden="true" className="text-xs">›</span>
+            </div>
+          </div>
+        )}
 
         {globalError && (
           <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 text-xs border border-rose-200 dark:border-rose-900 flex items-center justify-between animate-fade-in">
