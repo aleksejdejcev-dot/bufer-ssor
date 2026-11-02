@@ -12,9 +12,11 @@
 
 import time
 import json
+import uuid
 import secrets
 import logging
 import asyncio
+from datetime import datetime
 from typing import Optional, Literal
 from urllib.parse import parse_qsl, urlencode
 import hmac
@@ -31,13 +33,21 @@ from config import settings
 from config.ui_texts import get_script_hints
 from rate_limiter import generate_crockford_code, normalize_invite_code
 import db
+from repo import get_repo
+from retention_scheduler import retention_worker_loop
 from bot import (
     bot,
     dp,
     notify_initiator_prompt,
     send_white_flag,
     send_hint_message,
-    expired_sessions_cleaner_loop,
+    send_subscription_success,
+)
+from yookassa_service import (
+    create_yookassa_payment,
+    get_yookassa_payment,
+    get_plan,
+    PLANS,
 )
 
 # Настройка логирования без персональных данных
@@ -128,8 +138,16 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.error("Failed to set webhook: %s", e)
 
-    # 3. Запускаем фоновый воркер очистки просроченных сессий (48ч)
-    cleaner_task = asyncio.create_task(expired_sessions_cleaner_loop())
+    # 3. Запускаем фоновый планировщик очистки данных (Retention Scheduler с pg_try_advisory_lock)
+    retention_interval = getattr(settings, "RETENTION_INTERVAL_SECONDS", 3600)
+    retention_task = asyncio.create_task(
+        retention_worker_loop(
+            repo=get_repo(),
+            interval_seconds=retention_interval,
+            results_retention_days=settings.RESULTS_RETENTION_DAYS,
+            payment_retention_years=settings.PAYMENT_RETENTION_YEARS,
+        )
+    )
 
     yield
 
@@ -141,9 +159,9 @@ async def lifespan(app: FastAPI):
         except asyncio.CancelledError:
             pass
 
-    cleaner_task.cancel()
+    retention_task.cancel()
     try:
-        await cleaner_task
+        await retention_task
     except asyncio.CancelledError:
         pass
     await bot.session.close()
@@ -316,6 +334,10 @@ class HintRequest(BaseModel):
     )
 
 
+class PaymentCreateRequest(BaseModel):
+    plan: str = Field("month_sub", description="Идентификатор тарифа подписки")
+
+
 # ==============================================================================
 # Публичные эндпоинты: Healthcheck и Webhook Telegram
 # ==============================================================================
@@ -347,6 +369,80 @@ async def telegram_webhook(
     except Exception as e:
         logger.error("Error processing telegram webhook update: %s", e)
         return {"ok": False}
+
+
+@app.post("/api/webhook/yookassa")
+async def yookassa_webhook(request: Request):
+    """
+    Входящий вебхук от ЮKassa.
+    Для защиты от подделки статус платежа запрашивается напрямую через API ЮKassa с Basic Auth.
+    """
+    try:
+        event_data = await request.json()
+    except Exception:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid JSON")
+
+    event_type = event_data.get("event")
+    payment_obj = event_data.get("object", {})
+    payment_id = payment_obj.get("id")
+
+    if not payment_id:
+        return {"status": "ignored", "reason": "no_payment_id"}
+
+    if event_type != "payment.succeeded":
+        logger.info("ЮKassa webhook: событие %s пропущено для payment_id=%s", event_type, payment_id)
+        return {"status": "ok", "action": "ignored"}
+
+    # Проверка безопасности: запрашиваем актуальный статус напрямую в ЮKassa
+    try:
+        actual_payment = await get_yookassa_payment(payment_id)
+    except Exception as e:
+        logger.error("Не удалось верифицировать статус платежа %s в ЮKassa: %s", payment_id, e)
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Failed to verify payment")
+
+    if actual_payment.get("status") != "succeeded":
+        logger.warning(
+            "Поддельный или неактуальный вебхук: в ЮKassa платеж %s имеет статус %s",
+            payment_id,
+            actual_payment.get("status"),
+        )
+        return {"status": "ignored", "reason": "payment_not_succeeded"}
+
+    metadata = actual_payment.get("metadata", {})
+    couple_id = metadata.get("couple_id")
+    plan_name = metadata.get("plan", "month_sub")
+    plan_info = PLANS.get(plan_name, PLANS["month_sub"])
+    days = plan_info.get("days", 30)
+
+    # Атомарно активируем подписку (с защитой от повторных вебхуков)
+    activated = db.activate_subscription_for_couple(
+        couple_id=couple_id,
+        payment_id=payment_id,
+        days=days,
+    )
+
+    if activated:
+        logger.info("Подписка успешно активирована для пары %s (до %s)", couple_id, activated.get("subscription_until"))
+        valid_until_str = str(activated.get("subscription_until", ""))[:10]
+        try:
+            raw_sub = activated.get("subscription_until")
+            if raw_sub:
+                dt = datetime.fromisoformat(raw_sub)
+                valid_until_str = dt.strftime("%d.%m.%Y")
+        except Exception:
+            pass
+
+        p1_id = activated.get("partner_1_id")
+        p2_id = activated.get("partner_2_id")
+
+        if p1_id:
+            asyncio.create_task(send_subscription_success(p1_id, valid_until_str))
+        if p2_id:
+            asyncio.create_task(send_subscription_success(p2_id, valid_until_str))
+    else:
+        logger.info("Платеж %s уже был обработан ранее (идемпотентный пропуск)", payment_id)
+
+    return {"status": "ok"}
 
 
 # ==============================================================================
@@ -479,7 +575,7 @@ async def delete_couple_history(user: dict = Depends(require_legal_accepted)):
     if not couple:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Пара не найдена")
 
-    db.delete_history(couple["id"])
+    db.delete_history(couple["id"], initiated_by=user["telegram_id"])
     return {"status": "history_deleted", "couple_id": couple["id"]}
 
 
@@ -511,8 +607,78 @@ async def delete_my_couple(user: dict = Depends(require_legal_accepted)):
     if not couple:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Пара не найдена")
 
-    db.delete_couple_data(couple["id"])
+    db.delete_couple_data(couple["id"], initiated_by=user["telegram_id"])
     return {"status": "deleted"}
+
+
+# ==============================================================================
+# Эндпоинты подписки и платежей (YooKassa)
+# ==============================================================================
+
+@app.post("/payment/create")
+async def create_payment_order(
+    payload: PaymentCreateRequest,
+    user: dict = Depends(require_legal_accepted),
+):
+    """
+    Создает платежную сессию в ЮKassa для оформления подписки пары.
+    """
+    telegram_id = user["telegram_id"]
+    couple = db.get_user_couple(telegram_id)
+    if not couple:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Для оформления подписки необходимо состоять в паре",
+        )
+
+    try:
+        plan_info = get_plan(payload.plan)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+
+    try:
+        idempotence_key = str(uuid.uuid4())
+        metadata = {
+            "couple_id": couple["id"],
+            "telegram_id": telegram_id,
+            "plan": payload.plan,
+        }
+        yoo_data = await create_yookassa_payment(
+            amount=plan_info["amount"],
+            currency=plan_info["currency"],
+            description=plan_info["title"],
+            metadata=metadata,
+            idempotence_key=idempotence_key,
+        )
+
+        payment_id = yoo_data["id"]
+        confirmation_url = yoo_data.get("confirmation", {}).get("confirmation_url", "")
+        if not confirmation_url:
+            raise RuntimeError("ЮKassa не вернула confirmation_url")
+
+        # Сохраняем pending запись в БД
+        db.create_payment(
+            couple_id=couple["id"],
+            user_id=telegram_id,
+            payment_id=payment_id,
+            amount=plan_info["amount"],
+            currency=plan_info["currency"],
+            product=payload.plan,
+        )
+
+        return {
+            "payment_id": payment_id,
+            "confirmation_url": confirmation_url,
+        }
+    except Exception as e:
+        logger.exception("Ошибка при создании платежа: %s", e)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Не удалось создать платеж: {e}",
+        )
 
 
 # ==============================================================================

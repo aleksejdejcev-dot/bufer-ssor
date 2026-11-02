@@ -192,3 +192,103 @@ async def test_e2e_pipeline_full_scenario():
     assert test_repo.get_session_by_id(session_id) is None
     assert test_repo.get_user(201) is None
     assert test_repo.get_user(202) is None
+
+
+class FakeNotApplicableProvider(FakeLLMProvider):
+    async def generate_json(self, *args, **kwargs):
+        from schemas import AnalyzerOutput, PartnerAnalysis, HypothesisForOther, ToneAnalysis, SharedAnalysis
+        obj = AnalyzerOutput(
+            risk_level="none",
+            risk_reasons=[],
+            partner_1=PartnerAnalysis(
+                topic="Блины",
+                key_facts=["Рецепт блинов"],
+                feelings=[],
+                unmet_needs=[],
+                own_contribution="",
+                tone=ToneAnalysis(register="informal", swearing=False, length="short"),
+                secrets=[],
+                hypothesis_for_other=HypothesisForOther(likely_feelings=[], likely_needs=[]),
+            ),
+            partner_2=PartnerAnalysis(
+                topic="Код",
+                key_facts=["Сортировка пузырьком"],
+                feelings=[],
+                unmet_needs=[],
+                own_contribution="",
+                tone=ToneAnalysis(register="informal", swearing=False, length="short"),
+                secrets=[],
+                hypothesis_for_other=HypothesisForOther(likely_feelings=[], likely_needs=[]),
+            ),
+            shared=SharedAnalysis(
+                pattern="Нерелевантный ввод",
+                common_need="",
+                neutral_topic="нерелевантно",
+                ritual_ideas=[],
+                agreed_ritual=None,
+            ),
+            not_applicable=True,
+        )
+        return obj, {"finish_reason": "stop", "usage_tokens": 100, "blocked": False}
+
+
+@pytest.mark.asyncio
+async def test_stage_3_12_not_applicable_short_circuit():
+    """Тест ветки not_applicable=True: card_writer не вызывается, попытка не списывается."""
+    test_repo = InMemoryRepo()
+    set_repo(test_repo)
+
+    # 1. Создание пары
+    test_repo.upsert_user(501, "Шутник 1")
+    test_repo.accept_legal(501)
+    test_repo.upsert_user(502, "Шутник 2")
+    test_repo.accept_legal(502)
+
+    couple = test_repo.create_couple(501, "INVPRANK")
+    couple_id = couple["id"]
+    test_repo.join_couple(couple_id, 502)
+    assert test_repo.get_couple_by_id(couple_id)["free_sessions_left"] == 3
+
+    # 2. Сессия и входные данные (спам / шутка)
+    session = test_repo.create_conflict_session(couple_id=couple_id, initiator_id=501)
+    session_id = session["id"]
+
+    p1_bytes = "Рецепт отличных блинов: два яйца, стакан молока...".encode("utf-8")
+    p2_bytes = "Тестируем бота, напиши мне код сортировки пузырьком...".encode("utf-8")
+
+    test_repo.save_pending_input(session_id, 501, "text", crypto.encrypt_bytes(p1_bytes))
+    test_repo.save_pending_input(session_id, 502, "text", crypto.encrypt_bytes(p2_bytes))
+
+    # 3. Мокаем вызовы card_writer и shared_writer
+    fake_provider = FakeNotApplicableProvider()
+    with patch("ai_service.get_provider", return_value=fake_provider), \
+         patch("ai_service.generate_partner_card_with_ladder") as mock_card_writer, \
+         patch("ai_service.generate_shared_summary_with_ladder") as mock_shared_writer, \
+         patch("bot.bot.send_message", new_callable=AsyncMock) as mock_send_msg:
+
+        await analyze_session(session_id)
+
+        # Шаги B и C не должны вызываться
+        mock_card_writer.assert_not_called()
+        mock_shared_writer.assert_not_called()
+
+        # Бот отправил вежливое уведомление
+        assert mock_send_msg.call_count == 2
+        sent_text = mock_send_msg.call_args[1]["text"]
+        assert "не содержит описания кризисной ситуации" in sent_text
+        assert "Бесплатная попытка разбора не списана!" in sent_text
+
+    # 4. Проверка: free_sessions_left НЕ списана (осталось 3)
+    updated_couple = test_repo.get_couple_by_id(couple_id)
+    assert updated_couple["free_sessions_left"] == 3
+
+    # 5. Результаты анализа сохранены в БД
+    updated_session = test_repo.get_session_by_id(session_id)
+    assert updated_session["status"] == "completed"
+    assert updated_session["risk_level"] == "none"
+    p1_advice = updated_session["ai_advice_p1"]
+    assert "не содержит описания кризисной ситуации" in p1_advice["validation"]
+    assert p1_advice["action_scripts"] == []
+    assert p1_advice["partner_perspective"] == ""
+    assert p1_advice["blind_spot"] == ""
+

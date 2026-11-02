@@ -192,7 +192,14 @@ async def handle_start(message: Message, command: CommandObject):
             return
 
         # 6. Успешная связка
-        db.join_couple(couple["id"], telegram_id)
+        try:
+            db.join_couple(couple["id"], telegram_id)
+        except ValueError:
+            await message.answer(
+                "К этой паре уже присоединился партнер. Этот код приглашения уже был использован.",
+                reply_markup=get_miniapp_keyboard(),
+            )
+            return
         db.reset_invite_bruteforce(telegram_id)
         partner_1 = db.get_user(couple["partner_1_id"])
         partner_1_name = partner_1["first_name"] if partner_1 else "Партнер"
@@ -663,48 +670,23 @@ async def send_hint_message(to_telegram_id: int, hint_type: str):
 
 
 # ==============================================================================
-# Фоновая задача: проверка сессий, ожидающих ответа более 48 часов
+# Уведомления об оплате и подписке
 # ==============================================================================
 
-async def expired_sessions_cleaner_loop():
+async def send_subscription_success(to_telegram_id: int, valid_until_str: str):
     """
-    Периодический воркер (каждые 15 минут):
-    Находит сессии waiting_partner_2 старше 48 часов, переводит в expired,
-    удаляет исходники и оповещает инициатора.
+    Отправка поздравления об успешной активации подписки паре.
     """
-    while True:
-        try:
-            expired_sessions = db.get_expired_sessions()
-            for s in expired_sessions:
-                s_id = s["id"]
-                initiator_id = s["initiator_id"]
-
-                # Переводим в expired и удаляем pending_inputs
-                db.expire_session(s_id)
-
-                try:
-                    await bot.send_message(
-                        chat_id=initiator_id,
-                        text=(
-                            "⏳ Время ожидания ответа партнера (48 часов) истекло.\n"
-                            "Временные зашифрованные исходники были безвозвратно удалены в целях конфиденциальности.\n\n"
-                            "Вы можете начать новый разбор в приложении, когда оба будете готовы."
-                        ),
-                        reply_markup=get_miniapp_keyboard(),
-                    )
-                except Exception as ex:
-                    logger.warning("Не удалось оповестить инициатора о просроченной сессии %s: %s", s_id, ex)
-
-            # Также вызываем общую очистку по expires_at в pending_inputs
-            db.cleanup_expired_pending_inputs()
-
-            # Очистка по политике retention (обнуление старых сессий и сырых данных)
-            db.purge_expired_data(
-                days_retention=settings.RESULTS_RETENTION_DAYS,
-                hours_raw_ttl=settings.RAW_INPUT_TTL_HOURS,
-            )
-
-        except Exception as e:
-            logger.error("Ошибка в воркере expired_sessions_cleaner_loop: %s", e)
-
-        await asyncio.sleep(900)  # 15 минут
+    text = (
+        "🎉 Подписка «Буфер Ссор» успешно активирована!\n\n"
+        f"🗓️ Действует до: {valid_until_str}\n"
+        "✨ Теперь вашей паре доступны безлимитные медиации разногласий и разбор голосовых сообщений 24/7."
+    )
+    try:
+        await bot.send_message(
+            chat_id=to_telegram_id,
+            text=text,
+            reply_markup=get_miniapp_keyboard(),
+        )
+    except Exception as e:
+        logger.warning("Не удалось отправить уведомление о подписке (%s): %s", to_telegram_id, e)

@@ -268,3 +268,59 @@ def test_repo_claim_session_atomic_c4(repo):
     # Статус сессии стал processing
     updated = repo.get_session_by_id(s_id)
     assert updated["status"] == "processing"
+
+
+def test_join_couple_race_condition(repo):
+    """Тест гонки: два пользователя одновременно пытаются присоединиться к одной паре."""
+    import concurrent.futures
+    repo.upsert_user(1201, "Инициатор")
+    repo.upsert_user(1202, "Претендент 1")
+    repo.upsert_user(1203, "Претендент 2")
+    couple = repo.create_couple(1201, "INV-RACE")
+
+    results = []
+    errors = []
+
+    def _try_join(user_id):
+        try:
+            res = repo.join_couple(couple["id"], user_id)
+            results.append(res)
+        except Exception as e:
+            errors.append(e)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+        f1 = executor.submit(_try_join, 1202)
+        f2 = executor.submit(_try_join, 1203)
+        concurrent.futures.wait([f1, f2])
+
+    # Ровно один побеждает, ровно один получает отказ
+    assert len(results) == 1
+    assert len(errors) == 1
+    assert isinstance(errors[0], ValueError)
+    assert "Пара уже заполнена" in str(errors[0])
+
+
+def test_deletions_log_audit(repo):
+    """Тест фиксации факта удаления в deletions_log (GDPR / право на забвение)."""
+    repo.upsert_user(1301, "Пользователь 1")
+    repo.upsert_user(1302, "Пользователь 2")
+    couple = repo.create_couple(1301, "INV-DEL")
+    repo.join_couple(couple["id"], 1302)
+
+    # 1. Частичная очистка истории
+    repo.delete_history(couple["id"], initiated_by=1301)
+    logs = repo.get_deletions_log()
+    assert len(logs) >= 1
+    hist_entry = next(entry for entry in logs if entry["entity_type"] == "history")
+    assert hist_entry["couple_id_hash"] is not None
+    assert hist_entry["initiated_by_hash"] is not None
+    assert "1301" not in hist_entry["initiated_by_hash"]  # строго захэшировано
+
+    # 2. Полное удаление пары
+    repo.delete_couple_data(couple["id"], initiated_by=1302)
+    logs2 = repo.get_deletions_log()
+    assert len(logs2) >= 2
+    couple_entry = next(entry for entry in logs2 if entry["entity_type"] == "couple")
+    assert couple_entry["couple_id_hash"] is not None
+    assert couple_entry["initiated_by_hash"] is not None
+    assert "1302" not in couple_entry["initiated_by_hash"]  # строго захэшировано

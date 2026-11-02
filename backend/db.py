@@ -130,16 +130,16 @@ def cleanup_expired_pending_inputs() -> int:
     return get_repo().cleanup_expired_pending_inputs()
 
 
-def delete_history(couple_id: str) -> None:
-    return get_repo().delete_history(couple_id)
+def delete_history(couple_id: str, initiated_by: Optional[int] = None) -> None:
+    return get_repo().delete_history(couple_id, initiated_by=initiated_by)
 
 
 def purge_expired_data(days_retention: int = 30, hours_raw_ttl: int = 48) -> Dict[str, int]:
     return get_repo().purge_expired_data(days_retention=days_retention, hours_raw_ttl=hours_raw_ttl)
 
 
-def delete_couple_data(couple_id: str) -> None:
-    return get_repo().delete_couple_data(couple_id)
+def delete_couple_data(couple_id: str, initiated_by: Optional[int] = None) -> None:
+    return get_repo().delete_couple_data(couple_id, initiated_by=initiated_by)
 
 
 def save_payment(
@@ -151,6 +151,29 @@ def save_payment(
     couple_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     return get_repo().save_payment(product, amount, currency, provider_charge_id, payer_hash, couple_id)
+
+
+def create_payment(
+    couple_id: Any,
+    user_id: Any,
+    payment_id: str,
+    amount: Any,
+    currency: str = "RUB",
+    product: str = "month_sub",
+) -> Dict[str, Any]:
+    return get_repo().create_payment(couple_id, user_id, payment_id, amount, currency, product)
+
+
+def get_payment(payment_id: str) -> Optional[Dict[str, Any]]:
+    return get_repo().get_payment(payment_id)
+
+
+def activate_subscription_for_couple(
+    couple_id: Any,
+    payment_id: str,
+    days: int = 30,
+) -> Optional[Dict[str, Any]]:
+    return get_repo().activate_subscription_for_couple(couple_id, payment_id, days)
 
 
 def get_payments_by_payer_hash(payer_hash: str) -> List[Dict[str, Any]]:

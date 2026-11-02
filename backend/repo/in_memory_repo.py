@@ -3,6 +3,7 @@ InMemory реализация интерфейса Repository для локал�
 """
 
 import uuid
+import hashlib
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, Optional, List, Tuple
 from config import settings
@@ -17,12 +18,18 @@ class InMemoryRepo:
         self.pending_inputs: Dict[str, Dict[str, Any]] = {}
         self.payments: Dict[str, Dict[str, Any]] = {}
         self.rate_limiter = RateLimiter()
+        self.advisory_locks: set[int] = set()
+        self.deletions_log: List[Dict[str, Any]] = []
 
     def reset_state(self) -> None:
         self.users.clear()
         self.couples.clear()
         self.conflict_sessions.clear()
         self.pending_inputs.clear()
+        self.payments.clear()
+        self.rate_limiter = RateLimiter()
+        self.advisory_locks.clear()
+        self.deletions_log.clear()
         self.payments.clear()
         self.rate_limiter.clear()
 
@@ -99,10 +106,11 @@ class InMemoryRepo:
 
     def join_couple(self, couple_id: str, partner_2_id: int) -> Dict[str, Any]:
         c = self.couples.get(couple_id)
-        if c:
-            c["partner_2_id"] = partner_2_id
-            if partner_2_id in self.users:
-                self.users[partner_2_id]["couple_id"] = couple_id
+        if not c or c.get("partner_2_id") is not None:
+            raise ValueError("Пара уже заполнена или не существует")
+        c["partner_2_id"] = partner_2_id
+        if partner_2_id in self.users:
+            self.users[partner_2_id]["couple_id"] = couple_id
         return c
 
     def update_mood(self, couple_id: str, is_partner_1: bool, mood: int) -> Dict[str, Any]:
@@ -288,8 +296,21 @@ class InMemoryRepo:
             del self.pending_inputs[pid]
         return len(to_del)
 
-    def delete_history(self, couple_id: str) -> None:
+    def _hash_id(self, val: Any) -> str:
+        salt = getattr(settings, "PAYMENT_HASH_KEY", "buffer_salt")
+        return hashlib.sha256(f"{val}:{salt}".encode("utf-8")).hexdigest()
+
+    def delete_history(self, couple_id: str, initiated_by: Optional[int] = None) -> None:
         """Удаляет только сессии и историю пары, профили и подписка остаются."""
+        c_hash = self._hash_id(couple_id)
+        u_hash = self._hash_id(initiated_by) if initiated_by else "unknown"
+        self.deletions_log.append({
+            "id": str(uuid.uuid4()),
+            "couple_id_hash": c_hash,
+            "initiated_by_hash": u_hash,
+            "entity_type": "history",
+            "deleted_at": datetime.now(timezone.utc).isoformat(),
+        })
         s_ids = [s_id for s_id, s in self.conflict_sessions.items() if s.get("couple_id") == couple_id]
         for pid in list(self.pending_inputs.keys()):
             if self.pending_inputs[pid].get("session_id") in s_ids:
@@ -330,14 +351,28 @@ class InMemoryRepo:
 
         return {"purged_sessions": purged_sessions, "purged_inputs": purged_inputs}
 
-    def delete_couple_data(self, couple_id: str) -> None:
+    def delete_couple_data(self, couple_id: str, initiated_by: Optional[int] = None) -> None:
         """Полное удаление пары, истории и обоих профилей в users."""
+        c_hash = self._hash_id(couple_id)
+        u_hash = self._hash_id(initiated_by) if initiated_by else "unknown"
+        self.deletions_log.append({
+            "id": str(uuid.uuid4()),
+            "couple_id_hash": c_hash,
+            "initiated_by_hash": u_hash,
+            "entity_type": "couple",
+            "deleted_at": datetime.now(timezone.utc).isoformat(),
+        })
         couple = self.couples.get(couple_id)
         p1_id = couple.get("partner_1_id") if couple else None
         p2_id = couple.get("partner_2_id") if couple else None
 
-        # 1. Удаляем историю сессий и исходников
-        self.delete_history(couple_id)
+        # 1. Удаляем историю сессий и исходников (без повторной записи в deletions_log)
+        s_ids = [s_id for s_id, s in self.conflict_sessions.items() if s.get("couple_id") == couple_id]
+        for pid in list(self.pending_inputs.keys()):
+            if self.pending_inputs[pid].get("session_id") in s_ids:
+                del self.pending_inputs[pid]
+        for sid in s_ids:
+            del self.conflict_sessions[sid]
 
         # 2. Удаляем пару
         if couple_id in self.couples:
@@ -353,6 +388,9 @@ class InMemoryRepo:
         for pay in self.payments.values():
             if pay.get("couple_id") == couple_id:
                 pay["couple_id"] = None
+
+    def get_deletions_log(self) -> List[Dict[str, Any]]:
+        return list(self.deletions_log)
 
     def save_payment(
         self,
@@ -372,10 +410,95 @@ class InMemoryRepo:
             "provider_charge_id": provider_charge_id,
             "payer_hash": payer_hash,
             "couple_id": couple_id,
+            "status": "succeeded",
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
         self.payments[pay_id] = item
         return item
+
+    def create_payment(
+        self,
+        couple_id: Any,
+        user_id: Any,
+        payment_id: str,
+        amount: Any,
+        currency: str = "RUB",
+        product: str = "month_sub",
+    ) -> Dict[str, Any]:
+        pay_id = str(uuid.uuid4())
+        item = {
+            "id": pay_id,
+            "product": product,
+            "amount": float(amount) if hasattr(amount, "__float__") else amount,
+            "currency": currency,
+            "provider_charge_id": payment_id,
+            "payer_hash": self._hash_id(user_id),
+            "couple_id": str(couple_id) if couple_id else None,
+            "status": "pending",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "paid_at": None,
+        }
+        for p in self.payments.values():
+            if p.get("provider_charge_id") == payment_id:
+                p.update(item)
+                return p
+        self.payments[pay_id] = item
+        return item
+
+    def get_payment(self, payment_id: str) -> Optional[Dict[str, Any]]:
+        for p in self.payments.values():
+            if p.get("provider_charge_id") == payment_id:
+                return dict(p)
+        return None
+
+    def activate_subscription_for_couple(
+        self,
+        couple_id: Any,
+        payment_id: str,
+        days: int = 30,
+    ) -> Optional[Dict[str, Any]]:
+        target_pay = None
+        for p in self.payments.values():
+            if p.get("provider_charge_id") == payment_id:
+                target_pay = p
+                break
+
+        if not target_pay:
+            return None
+
+        if target_pay.get("status") == "succeeded":
+            return None
+
+        c_id = str(couple_id) if couple_id else target_pay.get("couple_id")
+        if not c_id or c_id not in self.couples:
+            return None
+
+        target_pay["status"] = "succeeded"
+        target_pay["paid_at"] = datetime.now(timezone.utc).isoformat()
+
+        couple = self.couples[c_id]
+        now = datetime.now(timezone.utc)
+        current_until = couple.get("subscription_until")
+        if current_until:
+            try:
+                dt = datetime.fromisoformat(current_until)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                base_date = max(now, dt)
+            except Exception:
+                base_date = now
+        else:
+            base_date = now
+
+        new_until = (base_date + timedelta(days=days)).isoformat()
+        couple["subscription_until"] = new_until
+
+        return {
+            "id": couple["id"],
+            "subscription_until": new_until,
+            "partner_1_id": couple["partner_1_id"],
+            "partner_2_id": couple.get("partner_2_id"),
+        }
 
     def get_payments_by_payer_hash(self, payer_hash: str) -> List[Dict[str, Any]]:
         return [p for p in self.payments.values() if p.get("payer_hash") == payer_hash]

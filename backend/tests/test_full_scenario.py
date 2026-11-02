@@ -169,7 +169,7 @@ def patch_db(monkeypatch):
         c[field] = mood
         return c
 
-    def mock_delete_couple_data(couple_id: str):
+    def mock_delete_couple_data(couple_id: str, initiated_by=None):
         # сброс users
         for u in mem_db.users.values():
             if u.get("couple_id") == couple_id:

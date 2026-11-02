@@ -138,7 +138,7 @@ FALLBACK_ACTION_SCRIPTS_OPTIONS: List[List[Dict[str, str]]] = [
     [
         {
             "label": "Сообщение прямо сейчас",
-            "text": "Мне жаль, что эмоции взяли верх над нами обоими. Я хочу найти решение, в котором нам обоим будет спокойно и уютно вместе.",
+            "text": "Мне тяжело от того, как прошёл наш разговор. Я хочу найти решение, в котором нам обоим будет спокойно и уютно вместе.",
         },
         {
             "label": "Предложение на сегодня или завтра",
@@ -227,3 +227,24 @@ FALLBACK_SHARED_SUMMARY = {
     "conversation_starter": FALLBACK_CONVERSATION_STARTER_OPTIONS[0],
 }
 get_fallback_field = get_random_fallback
+
+# Системный вежливый отказ при нерелевантном вводе (Этап 3.16)
+NOT_APPLICABLE_REFUSAL_MSG = (
+    "Текст не содержит описания кризисной ситуации в паре и не подлежит разбору. "
+    "Пожалуйста, опишите реальную ситуацию или конфликт между вами."
+)
+
+NOT_APPLICABLE_CARD: Dict[str, Any] = {
+    "validation": NOT_APPLICABLE_REFUSAL_MSG,
+    "partner_perspective": "",
+    "blind_spot": "",
+    "action_scripts": [],
+    "safety_note": "",
+    "ritual_unfit": False,
+}
+
+NOT_APPLICABLE_SHARED: Dict[str, Any] = {
+    "situation_overview": NOT_APPLICABLE_REFUSAL_MSG,
+    "shared_advice": "",
+    "conversation_starter": "",
+}

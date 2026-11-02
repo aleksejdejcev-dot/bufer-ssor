@@ -2,7 +2,16 @@ import React, { useState } from 'react';
 import { AlertTriangle, Trash2, X } from 'lucide-react';
 import WebApp from '@twa-dev/sdk';
 
-export default function ConfirmModal({ isOpen, onClose, onConfirm, isDeleting }) {
+export default function ConfirmModal({
+  isOpen,
+  onClose,
+  onConfirm,
+  isDeleting,
+  title = null,
+  description = null,
+  confirmText = null,
+  isSingleStep = false,
+}) {
   const [step, setStep] = useState(1);
 
   if (!isOpen) return null;
@@ -11,7 +20,7 @@ export default function ConfirmModal({ isOpen, onClose, onConfirm, isDeleting })
     try {
       WebApp.HapticFeedback?.impactOccurred('medium');
     } catch {}
-    if (step === 1) {
+    if (!isSingleStep && step === 1) {
       setStep(2);
     } else {
       onConfirm();
@@ -22,6 +31,18 @@ export default function ConfirmModal({ isOpen, onClose, onConfirm, isDeleting })
     setStep(1);
     onClose();
   };
+
+  const modalTitle = title || (step === 1 ? 'Удалить все данные пары?' : 'Точно удалить все данные?');
+  const modalDescription = description || (step === 1 ? (
+    'Это приведет к удалению связки с партнером, завершению всех текущих сессий и стиранию истории разборов.'
+  ) : (
+    <span className="text-rose-600 dark:text-rose-400 font-medium">
+      Внимание! Это действие необратимо. Восстановить доступ к паре и материалам будет невозможно.
+    </span>
+  ));
+  const buttonLabel = isDeleting
+    ? 'Удаление...'
+    : confirmText || (step === 1 ? 'Да, я хочу удалить (1/2)' : 'Подтверждаю безвозвратное удаление (2/2)');
 
   return (
     <div
@@ -46,16 +67,10 @@ export default function ConfirmModal({ isOpen, onClose, onConfirm, isDeleting })
 
         <div className="mt-3.5">
           <h3 className="font-semibold text-slate-900 dark:text-slate-100 text-base">
-            {step === 1 ? 'Удалить все данные пары?' : 'Точно удалить все данные?'}
+            {modalTitle}
           </h3>
           <p className="mt-2 text-xs sm:text-sm text-slate-500 dark:text-slate-400 leading-relaxed">
-            {step === 1 ? (
-              'Это приведет к удалению связки с партнером, завершению всех текущих сессий и стиранию истории разборов.'
-            ) : (
-              <span className="text-rose-600 dark:text-rose-400 font-medium">
-                Внимание! Это действие необратимо. Восстановить доступ к паре и материалам будет невозможно.
-              </span>
-            )}
+            {modalDescription}
           </p>
         </div>
 
@@ -66,13 +81,7 @@ export default function ConfirmModal({ isOpen, onClose, onConfirm, isDeleting })
             className="w-full py-2.5 px-4 bg-rose-600 hover:bg-rose-700 text-white font-medium text-xs sm:text-sm rounded-xl transition-colors flex items-center justify-center gap-2 shadow-sm disabled:opacity-50"
           >
             <Trash2 size={16} />
-            <span>
-              {isDeleting
-                ? 'Удаление...'
-                : step === 1
-                ? 'Да, я хочу удалить (1/2)'
-                : 'Подтверждаю безвозвратное удаление (2/2)'}
-            </span>
+            <span>{buttonLabel}</span>
           </button>
 
           <button

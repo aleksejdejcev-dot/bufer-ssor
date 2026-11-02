@@ -45,6 +45,60 @@ def test_validate_production_security_db_sslmode():
         validate_production_security(good_settings)
 
 
+def test_validate_production_security_enable_dev_tools():
+    """В production ENABLE_DEV_TOOLS строго запрещен."""
+    s = Settings(
+        ENVIRONMENT="production",
+        ENABLE_DEV_TOOLS=True,
+        DATABASE_URL="postgresql://user:secure_password_longer_than_16@host:5432/db",
+        DB_SSLMODE="require",
+        TELEGRAM_WEBHOOK_SECRET="secret",
+        INPUT_ENCRYPTION_KEY="test-encryption-key-for-testing-only",
+        PAYMENT_HASH_KEY="salt",
+    )
+    with pytest.raises(RuntimeError, match="ENABLE_DEV_TOOLS строго запрещен в режиме production"):
+        validate_production_security(s)
+
+
+@pytest.mark.postgres
+def test_postgres_repo_blocks_superuser_and_ssl_in_production(monkeypatch):
+    """PostgresRepo при ENVIRONMENT=production проверяет rolsuper и ssl_mode при старте."""
+    from repo.postgres_repo import PostgresRepo
+    from config import settings
+
+    monkeypatch.setattr(settings, "ENVIRONMENT", "production")
+
+    # 1. Запрет DB_SSLMODE=disable в prod
+    repo_no_ssl = PostgresRepo(
+        database_url="postgresql://buffer_admin:buffer_dev_pass@127.0.0.1:5432/buffer_ssor",
+        ssl_mode="disable",
+    )
+    with pytest.raises(RuntimeError, match="Production database connection must use TLS"):
+        repo_no_ssl._run_async(repo_no_ssl._get_pool())
+    repo_no_ssl.close()
+
+    # 2. Запрет подключения под суперпользователем (buffer_admin rolsuper=True) в prod
+    from unittest.mock import AsyncMock, MagicMock, patch
+    mock_conn = AsyncMock()
+    mock_conn.fetchval = AsyncMock(return_value=True)
+    mock_pool = MagicMock()
+    mock_pool.acquire.return_value.__aenter__.return_value = mock_conn
+    mock_pool.acquire.return_value.__aexit__.return_value = None
+    mock_pool.close = AsyncMock()
+
+    with patch("asyncpg.create_pool", new_callable=AsyncMock, return_value=mock_pool):
+        repo_admin = PostgresRepo(
+            database_url="postgresql://buffer_admin:buffer_dev_pass@127.0.0.1:5432/buffer_ssor",
+            ssl_mode="require",
+        )
+        with pytest.raises(RuntimeError, match="Production database connection must not use a superuser role"):
+            repo_admin._run_async(repo_admin._get_pool())
+        mock_conn.fetchval.assert_awaited_once_with(
+            "SELECT rolsuper FROM pg_roles WHERE rolname = current_user;"
+        )
+        repo_admin.close()
+
+
 def test_validate_production_security_passwords():
     """Task 4: В production запрещены dev-пароли и пароли короче 16 символов."""
     # 1. Dev-пароли запрещены

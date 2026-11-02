@@ -1,13 +1,43 @@
-import React from 'react';
-import { Sparkles, ArrowLeft, Check, Shield } from 'lucide-react';
+import React, { useState } from 'react';
+import { Sparkles, ArrowLeft, Check, Shield, AlertCircle } from 'lucide-react';
 import WebApp from '@twa-dev/sdk';
+import { api } from '../api/client';
 
 export default function PaywallStub({ onBack }) {
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState(null);
+
   const handleBack = () => {
     try {
       WebApp.HapticFeedback?.impactOccurred('light');
     } catch {}
     onBack();
+  };
+
+  const handleSubscribe = async () => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      WebApp.HapticFeedback?.impactOccurred('medium');
+      const res = await api.createPayment('month_sub');
+      if (res && res.confirmation_url) {
+        if (window.Telegram?.WebApp?.openLink) {
+          window.Telegram.WebApp.openLink(res.confirmation_url);
+        } else if (WebApp?.openLink) {
+          WebApp.openLink(res.confirmation_url);
+        } else {
+          window.open(res.confirmation_url, '_blank');
+        }
+      } else {
+        throw new Error('Не удалось получить ссылку для оплаты');
+      }
+    } catch (err) {
+      console.error('Payment error:', err);
+      setError(err.message || 'Ошибка создания платежа. Попробуйте позже.');
+      WebApp.HapticFeedback?.notificationOccurred('error');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (
@@ -28,17 +58,17 @@ export default function PaywallStub({ onBack }) {
             <Sparkles size={28} />
           </div>
           <h2 className="text-xl font-bold text-slate-900 dark:text-slate-100 tracking-tight">
-            Бесплатные разборы закончились
+            Оформите подписку для пары
           </h2>
           <p className="mt-2 text-xs sm:text-sm text-slate-500 dark:text-slate-400 leading-relaxed max-w-xs mx-auto">
-            Вы использовали 2 стартовых разбора медиатора для вашей пары.
+            Один тариф на двоих: безлимитные медиации, разбор голосовых сообщений и забота о ваших отношениях.
           </p>
         </div>
 
         {/* Карточка преимуществ */}
         <div className="bg-white dark:bg-zinc-900 rounded-2xl p-5 border border-slate-200/70 dark:border-zinc-800 shadow-sm space-y-3.5">
           <div className="font-semibold text-xs text-slate-400 uppercase tracking-wider">
-            Скоро в подписке:
+            Что входит в подписку:
           </div>
 
           <div className="flex items-start gap-3">
@@ -69,18 +99,34 @@ export default function PaywallStub({ onBack }) {
           </div>
         </div>
 
+        {error && (
+          <div className="mt-4 p-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200/60 dark:border-rose-900/40 flex items-center gap-2.5 text-xs text-rose-600 dark:text-rose-400">
+            <AlertCircle size={15} className="shrink-0" />
+            <span>{error}</span>
+          </div>
+        )}
+
         {/* Информационный бэйдж */}
-        <div className="mt-4 flex items-center justify-center gap-2 text-xs text-slate-400">
-          <Shield size={14} />
-          <span>Платежи подключаются на следующем этапе</span>
+        <div className="mt-4 flex items-center justify-center gap-1.5 text-xs text-slate-400">
+          <Shield size={14} className="text-emerald-500" />
+          <span>Безопасная оплата через ЮKassa</span>
         </div>
       </div>
 
-      {/* Кнопка возврата */}
-      <div className="pt-6">
+      {/* Кнопки действий */}
+      <div className="pt-6 space-y-2.5">
+        <button
+          onClick={handleSubscribe}
+          disabled={isLoading}
+          className="w-full py-3.5 px-4 bg-indigo-600 hover:bg-indigo-700 active:scale-[0.99] text-white font-semibold rounded-xl text-sm transition-all shadow-md shadow-indigo-500/20 flex items-center justify-center gap-2 disabled:opacity-50"
+        >
+          <Sparkles size={16} />
+          <span>{isLoading ? 'Подключение к ЮKassa...' : 'Оформить подписку за 199 ₽ / мес'}</span>
+        </button>
+
         <button
           onClick={handleBack}
-          className="w-full py-3 px-4 bg-slate-900 dark:bg-slate-100 hover:bg-slate-800 dark:hover:bg-white text-white dark:text-slate-900 text-sm font-semibold rounded-xl transition-all shadow-sm"
+          className="w-full py-2.5 px-4 bg-transparent hover:bg-slate-100 dark:hover:bg-zinc-800 text-slate-500 dark:text-slate-400 text-xs font-medium rounded-xl transition-all"
         >
           Вернуться на главную
         </button>

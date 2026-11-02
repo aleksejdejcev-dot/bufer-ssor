@@ -28,7 +28,12 @@ from typing import Dict, Any, List, Optional, Tuple, Union
 from config import settings
 from config.hotlines import get_hotlines_text
 from config.safety_messages import get_high_risk_message, get_elevated_risk_message
-from config.fallbacks import get_random_fallback, SPARSE_SHORTNESS_PREFIXES
+from config.fallbacks import (
+    get_random_fallback,
+    SPARSE_SHORTNESS_PREFIXES,
+    NOT_APPLICABLE_CARD,
+    NOT_APPLICABLE_SHARED,
+)
 import crypto
 from repo import get_repo
 from leak_guard import (
@@ -249,6 +254,7 @@ def make_blocked_analyzer_output(reason: str = "provider_refusal") -> AnalyzerOu
         partner_2=dummy_partner,
         shared=dummy_shared,
         not_applicable=False,
+        provider_refusal=True,
     )
 
 
@@ -605,6 +611,8 @@ async def generate_partner_card_with_ladder(
     is_blocked = meta.get("blocked", False)
     if card is not None and not is_blocked:
         card = sanitize_card_minor_banned_words(card)
+        if agreed_ritual and card.action_scripts and not card.ritual_unfit:
+            card.action_scripts = align_action_scripts_with_ritual(card.action_scripts, agreed_ritual)
         if effective_sparse:
             card.validation = format_sparse_validation(card.validation)
         errors = validate_partner_card(card, is_high_risk=False, sparse=effective_sparse)
@@ -637,6 +645,8 @@ async def generate_partner_card_with_ladder(
         card, meta = await call_card_writer(p, retry_contents, model=model, tracker=tracker)
         if card is not None and not meta.get("blocked"):
             card = sanitize_card_minor_banned_words(card)
+            if agreed_ritual and card.action_scripts and not card.ritual_unfit:
+                card.action_scripts = align_action_scripts_with_ritual(card.action_scripts, agreed_ritual)
             if effective_sparse:
                 card.validation = format_sparse_validation(card.validation)
             errors = validate_partner_card(card, is_high_risk=False, sparse=effective_sparse)
@@ -666,6 +676,8 @@ async def generate_partner_card_with_ladder(
         card, meta = await call_card_writer(p, safe_contents, model=model, tracker=tracker)
         if card is not None and not meta.get("blocked"):
             card = sanitize_card_minor_banned_words(card)
+            if agreed_ritual and card.action_scripts and not card.ritual_unfit:
+                card.action_scripts = align_action_scripts_with_ritual(card.action_scripts, agreed_ritual)
             if effective_sparse:
                 card.validation = format_sparse_validation(card.validation)
             errors = validate_partner_card(card, is_high_risk=False, sparse=effective_sparse)
@@ -1049,9 +1061,27 @@ async def analyze_session(session_id: str) -> None:
             )
 
         # ----------------------------------------------------------------------
+        # ВЕТВЬ 0: НЕРЕЛЕВАНТНЫЙ ВВОД / СПАМ / ШУТКА (NOT APPLICABLE) (Этап 3.16)
+        # ----------------------------------------------------------------------
+        if getattr(analyzer_res, "not_applicable", False):
+            logger.info("Analyzer marked session %s as not_applicable=True. Using polite refusal notice.", session_id)
+            p1_resp = PartnerResponse(**NOT_APPLICABLE_CARD)
+            p2_resp = PartnerResponse(**NOT_APPLICABLE_CARD)
+            shared_res = SharedSummary(**NOT_APPLICABLE_SHARED)
+            mediator_output = MediatorOutput(
+                risk_level="none",
+                partner_1_response=p1_resp,
+                partner_2_response=p2_resp,
+                shared_summary=shared_res,
+                safety_note="",
+                not_applicable=True,
+                provider_refusal=getattr(analyzer_res, "provider_refusal", False),
+            )
+
+        # ----------------------------------------------------------------------
         # ВЕТВЬ 1: ВЫСОКИЙ РИСК (HIGH) ИЛИ ОТКАЗ ПРОВАЙДЕРА
         # ----------------------------------------------------------------------
-        if analyzer_res.risk_level == "high":
+        elif analyzer_res.risk_level == "high":
             safety_msg = get_high_risk_message()
             p1_resp = PartnerResponse(
                 validation=safety_msg,
@@ -1078,6 +1108,7 @@ async def analyze_session(session_id: str) -> None:
                 partner_2_response=p2_resp,
                 shared_summary=shared_res,
                 safety_note=safety_msg,
+                provider_refusal=getattr(analyzer_res, "provider_refusal", False),
             )
 
         # ----------------------------------------------------------------------
@@ -1128,7 +1159,15 @@ async def analyze_session(session_id: str) -> None:
                 tracker=tracker,
             )
 
-            # Проверка согласованности длительностей ритуала (Этап 3.3)
+            # Автовыравнивание ритуала в action_scripts перед валидацией согласованности (Этап 3.18)
+            if analyzer_res.shared and analyzer_res.shared.agreed_ritual:
+                rit = analyzer_res.shared.agreed_ritual
+                if p1_card.action_scripts and not p1_card.ritual_unfit:
+                    p1_card.action_scripts = align_action_scripts_with_ritual(p1_card.action_scripts, rit)
+                if p2_card.action_scripts and not p2_card.ritual_unfit:
+                    p2_card.action_scripts = align_action_scripts_with_ritual(p2_card.action_scripts, rit)
+
+            # Проверка согласованности длительностей ритуала (Этап 3.3, 3.18)
             p1_s2_text = p1_card.action_scripts[1].text if len(p1_card.action_scripts) >= 2 else ""
             p2_s2_text = p2_card.action_scripts[1].text if len(p2_card.action_scripts) >= 2 else ""
             cons_errs = validate_ritual_consistency(
@@ -1288,6 +1327,7 @@ async def analyze_session(session_id: str) -> None:
                 partner_2_response=p2_card,
                 shared_summary=shared_card,
                 safety_note=safety_note_text,
+                provider_refusal=getattr(analyzer_res, "provider_refusal", False),
             )
 
             # ==================================================================
@@ -1418,8 +1458,8 @@ async def analyze_session(session_id: str) -> None:
         tracker["blocked_calls"],
     )
 
-    # Автовыравнивание ритуала в action_scripts с agreed_ritual
-    if mediator_output.shared_summary and getattr(mediator_output.shared_summary, "agreed_ritual", None):
+    # Автовыравнивание ритуала в action_scripts с agreed_ritual (только для релевантных разборов)
+    if not mediator_output.not_applicable and mediator_output.shared_summary and getattr(mediator_output.shared_summary, "agreed_ritual", None):
         ritual = mediator_output.shared_summary.agreed_ritual
         if mediator_output.partner_1_response and mediator_output.partner_1_response.action_scripts:
             mediator_output.partner_1_response.action_scripts = align_action_scripts_with_ritual(
@@ -1440,17 +1480,26 @@ async def analyze_session(session_id: str) -> None:
         risk_level=mediator_output.risk_level,
         completed_at=now_iso,
     )
-    logger.info("Analysis successfully saved in DB for session %s", session_id)
+    logger.info("Analysis successfully saved in DB for session %s (not_applicable=%s)", session_id, mediator_output.not_applicable)
 
-    has_sub, sub_type = repo.check_couple_access(couple)
-    if sub_type == "free_session":
-        repo.decrement_free_sessions(couple["id"])
+    # При not_applicable бесплатный разбор НЕ списывается (Этап 3.12)
+    if not mediator_output.not_applicable:
+        has_sub, sub_type = repo.check_couple_access(couple)
+        if sub_type == "free_session":
+            repo.decrement_free_sessions(couple["id"])
 
-    push_message = (
-        "✨ Разбор вашей ситуации готов!\n\n"
-        "Мы подготовили персональный разбор для каждого и общий итог для пары.\n"
-        "Откройте приложение, чтобы ознакомиться с результатами."
-    )
+    if mediator_output.not_applicable:
+        push_message = (
+            "ℹ️ Текст не содержит описания кризисной ситуации в паре и не подлежит разбору.\n\n"
+            "Пожалуйста, опишите реальную ситуацию или конфликт между вами.\n"
+            "Бесплатная попытка разбора не списана!"
+        )
+    else:
+        push_message = (
+            "✨ Разбор вашей ситуации готов!\n\n"
+            "Мы подготовили персональный разбор для каждого и общий итог для пары.\n"
+            "Откройте приложение, чтобы ознакомиться с результатами."
+        )
     for target_id in (p1_id, p2_id):
         if target_id:
             try:

@@ -33,7 +33,12 @@ sys.path.insert(0, str(backend_dir))
 import pymorphy3
 from config import settings
 from config.safety_messages import get_high_risk_message, get_elevated_risk_message
-from config.fallbacks import get_random_fallback
+from config.fallbacks import (
+    get_random_fallback,
+    NOT_APPLICABLE_REFUSAL_MSG,
+    NOT_APPLICABLE_CARD,
+    NOT_APPLICABLE_SHARED,
+)
 from config.ui_texts import DEFAULT_SCRIPT_HINTS
 from schemas import (
     AnalyzerOutput,
@@ -55,6 +60,7 @@ from validators import (
     find_forbidden_in_string,
     find_shared_forbidden,
     is_unknown_word,
+    extract_user_input_words,
     SPELL_WHITELIST,
     sanitize_card_minor_banned_words,
     sanitize_shared_minor_banned_words,
@@ -167,12 +173,12 @@ def check_lexical_leakage(
     return sorted(list(leaks))
 
 
-def find_unknown_words_in_text(text: str) -> List[str]:
-    """Возвращает список неизвестных слов в тексте (с учетом белого списка и приставок не-/недо-/со-)."""
+def find_unknown_words_in_text(text: str, user_whitelist: Optional[Set[str]] = None) -> List[str]:
+    """Возвращает список неизвестных слов в тексте (с учетом белого списка и пользовательского ввода)."""
     words = re.findall(r"\b[а-яёА-ЯЁ]+(?:-[а-яёА-ЯЁ]+)*\b", text)
     unknown = []
     for w in words:
-        if is_unknown_word(w, morph_analyzer=morph) and w.lower() not in unknown:
+        if is_unknown_word(w, morph_analyzer=morph, user_whitelist=user_whitelist) and w.lower() not in unknown:
             unknown.append(w.lower())
     return unknown
 
@@ -199,6 +205,19 @@ def validate_output_quality(
     errors = []
     metadata = {}
     is_high = (output.risk_level == "high")
+
+    if getattr(output, "not_applicable", False):
+        p1_val = output.partner_1_response.validation.strip()
+        p2_val = output.partner_2_response.validation.strip()
+        if p1_val != p2_val:
+            errors.append(f"[{sample_id}] При not_applicable тексты для партнера 1 и 2 должны быть идентичны!")
+        if len(output.partner_1_response.action_scripts) != 0 or len(output.partner_2_response.action_scripts) != 0:
+            errors.append(f"[{sample_id}] При not_applicable action_scripts должны быть пустыми")
+        if "не подлежит разбору" not in p1_val:
+            errors.append(f"[{sample_id}] Ожидался системный отказ для not_applicable, получено: {p1_val[:50]}...")
+        if p1_val != NOT_APPLICABLE_REFUSAL_MSG:
+            errors.append(f"[{sample_id}] Текст отказа not_applicable не совпадает с эталонным!")
+        return errors, metadata
 
     if is_high:
         p1_val = output.partner_1_response.validation.strip()
@@ -266,7 +285,8 @@ def validate_output_quality(
     p2_starts_softener = any(pp2.startswith(pfx) for pfx in softener_prefixes) if not is_high else False
 
     # Опечатки и копирование из промпта
-    unknown_words = find_unknown_words_in_text(all_output_text) if not is_high else []
+    user_words = extract_user_input_words(f"{p1_raw} {p2_raw}", morph_analyzer=morph)
+    unknown_words = find_unknown_words_in_text(all_output_text, user_whitelist=user_words) if not is_high else []
     copied_prompt_phrases = check_copied_from_prompt(all_output_text)
 
     metadata["lexical_leaks_p1"] = lexical_leaks_p1
@@ -365,7 +385,20 @@ async def run_single_sample(
         bool(sample.get("sparse")) or (len(p2_text.split()) < 20) or (analyzer_res.partner_2.sparse and len(p2_text.split()) < 30)
     )
 
-    if analyzer_res.risk_level == "high":
+    if getattr(analyzer_res, "not_applicable", False):
+        p1_resp = PartnerResponse(**NOT_APPLICABLE_CARD)
+        p2_resp = PartnerResponse(**NOT_APPLICABLE_CARD)
+        shared_res = SharedSummary(**NOT_APPLICABLE_SHARED)
+        mediator_output = MediatorOutput(
+            risk_level="none",
+            partner_1_response=p1_resp,
+            partner_2_response=p2_resp,
+            shared_summary=shared_res,
+            safety_note="",
+            not_applicable=True,
+            provider_refusal=getattr(analyzer_res, "provider_refusal", False),
+        )
+    elif analyzer_res.risk_level == "high":
         safety_msg = get_high_risk_message()
         p1_resp = PartnerResponse(
             validation=safety_msg,
@@ -619,13 +652,18 @@ async def run_single_sample(
         is_sparse_p2=p2_is_sparse,
     )
 
-    is_blocked_case = (mediator_output.risk_level == "high" and any("refusal" in str(r).lower() or "blocked" in str(r).lower() for r in analyzer_res.risk_reasons))
+    is_blocked_case = bool(
+        getattr(analyzer_res, "provider_refusal", False)
+        or getattr(mediator_output, "provider_refusal", False)
+        or (mediator_output.risk_level == "high" and any("refusal" in str(r).lower() or "blocked" in str(r).lower() for r in analyzer_res.risk_reasons))
+    )
 
     result_data = {
         "id": sample_id,
         "name": name,
         "expected_risk": sample.get("expected_risk"),
         "actual_risk": mediator_output.risk_level,
+        "provider_refusal": is_blocked_case,
         "analyzer_reasons": analyzer_res.risk_reasons,
         "secrets_p1": analyzer_res.partner_1.secrets,
         "secrets_p2": analyzer_res.partner_2.secrets,
@@ -654,17 +692,26 @@ def print_clean_readable_sample(res: Dict[str, Any]):
     """Печатает разбор отдельным структурированным блоком для удобного чтения человеком."""
     print("=" * 80)
     print(f"КЕЙС: {res['id']} — {res['name']}")
-    print(f"Оценка риска: {res['actual_risk'].upper()} (ожидалось: {res.get('expected_risk')})")
 
     out = res["mediator_output"]
     p1 = out.get("partner_1_response", {})
     p2 = out.get("partner_2_response", {})
     sh = out.get("shared_summary", {})
 
-    if out.get("risk_level") == "high":
+    if out.get("not_applicable"):
+        print(f"Оценка риска: NONE (not_applicable) (ожидалось: {res.get('expected_risk')})")
+        print("\nℹ️ НЕРЕЛЕВАНТНЫЙ ВВОД / НЕ ССОРА: Выдан аккуратный вежливый отказ:")
+        print(f"  {p1.get('validation')}")
+    elif out.get("provider_refusal") or res.get("is_blocked"):
+        print(f"Оценка риска: ⚠️ ОТКАЗ ПРОВАЙДЕРА (provider_refusal) (ожидалось: {res.get('expected_risk')})")
+        print("\n⚠️ ОТКАЗ ПРОВАЙДЕРА (provider_refusal): Выдано экстренное сообщение безопасности:")
+        print(f"  {out.get('safety_note')}")
+    elif out.get("risk_level") == "high":
+        print(f"Оценка риска: {res['actual_risk'].upper()} (ожидалось: {res.get('expected_risk')})")
         print("\n⚠️ ВЫСОКИЙ РИСК: Выдано экстренное сообщение безопасности:")
         print(f"  {out.get('safety_note')}")
     else:
+        print(f"Оценка риска: {res['actual_risk'].upper()} (ожидалось: {res.get('expected_risk')})")
         print("\n--- РАЗБОР ДЛЯ ПАРТНЁРА 1 ---")
         print(f"• Понимание (validation):\n  {p1.get('validation')}")
         print(f"• Взгляд партнёра (partner_perspective):\n  {p1.get('partner_perspective')}")
@@ -737,7 +784,7 @@ def compute_metrics(results: List[Dict[str, Any]]) -> Dict[str, Any]:
     all_copied_phrases = []
 
     for r in valid_cases:
-        if r.get("actual_risk") != "high":
+        if r.get("actual_risk") != "high" and not r.get("mediator_output", {}).get("not_applicable"):
             total_ritual_cases += 1
             mo = r.get("mediator_output", {})
             p1_r = mo.get("partner_1_response", {})
@@ -866,8 +913,8 @@ def dry_validate(file_path: Path) -> Tuple[Dict[str, Any], List[str]]:
         mediator_out = item.get("mediator_output", {})
         risk_level = mediator_out.get("risk_level", item.get("actual_risk", "normal"))
 
-        # Для кейсов normal/elevated валидируем схемы и правила
-        if risk_level != "high":
+        # Для кейсов normal/elevated валидируем схемы и правила (если не high и не not_applicable)
+        if risk_level != "high" and not mediator_out.get("not_applicable"):
             p1_resp = mediator_out.get("partner_1_response")
             p2_resp = mediator_out.get("partner_2_response")
             sh_resp = mediator_out.get("shared_summary")
@@ -956,6 +1003,9 @@ def dry_validate(file_path: Path) -> Tuple[Dict[str, Any], List[str]]:
                 if "При sparse=True в validation" in re_err or "При sparse=True в начале validation" in re_err:
                     # Ошибки старого прогона, устраненные в Этапе 3.11 детерминированным добавлением пометки
                     continue
+                if mediator_out.get("not_applicable"):
+                    # Ошибки старых прогонов до внедрения короткого замыкания системного отказа
+                    continue
                 tag = f"[{s_id} Recorded] {re_err}"
                 if tag not in all_errors:
                     all_errors.append(tag)
@@ -1005,6 +1055,7 @@ async def main():
     parser.add_argument("--no-cache", action="store_true", help="Не использовать кэш Шага A")
     parser.add_argument("--compare", nargs="*", default=None, help="Сравнение файлов: --compare file1.json file2.json (или сохранить out_<provider>_<model>_<ts>.json)")
     parser.add_argument("--dry-validate", type=str, default=None, help="Проверить уже сохранённый JSON без обращений к ИИ")
+    parser.add_argument("--samples-file", type=str, default=None, help="Путь к файлу с кейсами (по умолчанию backend/tests/samples.json)")
     args = parser.parse_args()
 
     # Режим dry-validate (без обращения к сети и ИИ)
@@ -1028,11 +1079,12 @@ async def main():
     print(f"Кэш Шага A (TEST_CACHE=1): {'ВКЛ' if allow_cache else 'ВЫКЛ'} | Пауза: {args.sleep}с")
     print(f"================================================================================\n")
 
-    if not SAMPLES_FILE.exists():
-        print(f"❌ Файл с кейсами не найден: {SAMPLES_FILE}")
+    target_samples_file = Path(args.samples_file) if args.samples_file else SAMPLES_FILE
+    if not target_samples_file.exists():
+        print(f"❌ Файл с кейсами не найден: {target_samples_file}")
         sys.exit(1)
 
-    with open(SAMPLES_FILE, "r", encoding="utf-8") as f:
+    with open(target_samples_file, "r", encoding="utf-8") as f:
         samples_raw = json.load(f)
 
     # Приоритетная сортировка кейсов
@@ -1067,7 +1119,11 @@ async def main():
         samples = expanded_samples
         print(f"🔁 Количество прогонов (--runs): {args.runs}. Всего запусков: {len(samples)}")
 
-    latest_out = Path(__file__).resolve().parent / "samples_results.json"
+    is_default_samples = (target_samples_file.resolve() == SAMPLES_FILE.resolve())
+    if is_default_samples:
+        latest_out = Path(__file__).resolve().parent / "samples_results.json"
+    else:
+        latest_out = Path(__file__).resolve().parent / f"{target_samples_file.stem}_results.json"
     resumed_dict: Dict[str, Dict[str, Any]] = {}
     if latest_out.exists() and args.resume:
         try:
@@ -1129,7 +1185,8 @@ async def main():
     # Сохранение версионного файла tests/out_<provider>_<model>_<дата>.json
     clean_model_name = active_model.replace("/", "_")
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    out_versioned_path = Path(__file__).resolve().parent / f"out_{provider.provider_name}_{clean_model_name}_{ts}.json"
+    prefix = "out" if is_default_samples else f"out_{target_samples_file.stem}"
+    out_versioned_path = Path(__file__).resolve().parent / f"{prefix}_{provider.provider_name}_{clean_model_name}_{ts}.json"
     with open(out_versioned_path, "w", encoding="utf-8") as f:
         json.dump(all_results, f, ensure_ascii=False, indent=2)
     print(f"💾 Версионный отчет сохранен в: {out_versioned_path}")

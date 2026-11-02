@@ -218,6 +218,10 @@ class AnalyzerOutput(BaseModel):
         False,
         description="Флаг: текст не про конфликт или автор младше 18 лет",
     )
+    provider_refusal: Optional[bool] = Field(
+        False,
+        description="Флаг отказа или цензурной блокировки провайдера",
+    )
 
 
 # ==============================================================================
@@ -327,6 +331,14 @@ class MediatorOutput(BaseModel):
     safety_note: str = Field(
         "",
         description="Инструкции по безопасности и контакты экстренной помощи",
+    )
+    not_applicable: bool = Field(
+        default=False,
+        description="Флаг: текст не относится к конфликту в паре или является шуткой/спамом",
+    )
+    provider_refusal: bool = Field(
+        default=False,
+        description="Флаг отказа или цензурной блокировки провайдера",
     )
 
 

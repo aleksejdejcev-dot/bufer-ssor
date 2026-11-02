@@ -42,15 +42,22 @@ def get_spell_morph() -> Any:
     return _spell_morph
 
 
-def is_unknown_word(word: str, morph_analyzer: Optional[Any] = None) -> bool:
+def is_unknown_word(
+    word: str,
+    morph_analyzer: Optional[Any] = None,
+    user_whitelist: Optional[Set[str]] = None,
+) -> bool:
     """
-    Проверяет, является ли слово опечаткой или неизвестным словом (Этап 3.9).
-    Учитывает белый список, слова с дефисом, и приставки 'не-', 'недо-', 'со-'.
+    Проверяет, является ли слово опечаткой или неизвестным словом (Этап 3.9, 3.13).
+    Учитывает белый список, слова с дефисом, приставки 'не-', 'недо-', 'со-',
+    а также слова и леммы из пользовательского ввода (user_whitelist).
     """
     clean = word.lower().strip(".,!?:;\"'«»()[]{}*`~")
     if not clean or len(clean) < 3:
         return False
     if clean in SPELL_WHITELIST:
+        return False
+    if user_whitelist and clean in user_whitelist:
         return False
 
     # Проверка слов из SPELL_WHITELIST с падежными окончаниями (Этап 3.11)
@@ -62,9 +69,18 @@ def is_unknown_word(word: str, morph_analyzer: Optional[Any] = None) -> bool:
 
     morph = morph_analyzer or get_spell_morph()
 
+    if user_whitelist:
+        for p in morph.parse(clean):
+            if p.normal_form in user_whitelist:
+                return False
+
     if "-" in clean:
         parts = clean.split("-")
-        if all(morph.word_is_known(p) or p in SPELL_WHITELIST for p in parts if len(p) >= 2):
+        if all(
+            morph.word_is_known(p) or p in SPELL_WHITELIST or (user_whitelist and p in user_whitelist)
+            for p in parts
+            if len(p) >= 2
+        ):
             return False
 
     if morph.word_is_known(clean):
@@ -74,13 +90,41 @@ def is_unknown_word(word: str, morph_analyzer: Optional[Any] = None) -> bool:
     for pfx in ("недо", "не", "со"):
         if clean.startswith(pfx) and len(clean) > len(pfx) + 2:
             stem = clean[len(pfx):]
-            if morph.word_is_known(stem) or stem in SPELL_WHITELIST:
+            if (
+                morph.word_is_known(stem)
+                or stem in SPELL_WHITELIST
+                or (user_whitelist and stem in user_whitelist)
+            ):
                 return False
 
     parses = morph.parse(clean)
     if not parses:
         return True
     return any(method[0].__class__.__name__ in ("FakeDictionary", "UnknAnalyzer") for method in parses[0].methods_stack)
+
+
+def extract_user_input_words(text: str, morph_analyzer: Optional[Any] = None) -> Set[str]:
+    """
+    Извлекает токены, части через дефис и леммы из пользовательского текста
+    для белого списка орфографии (Этап 3.13).
+    """
+    if not text:
+        return set()
+    morph = morph_analyzer or get_spell_morph()
+    tokens = re.findall(r"\b[а-яёa-z0-9]+(?:-[а-яёa-z0-9]+)*\b", text.lower())
+    result: Set[str] = set()
+    for tok in tokens:
+        clean = tok.strip(".,!?:;\"'«»()[]{}*`~")
+        if not clean:
+            continue
+        result.add(clean)
+        if "-" in clean:
+            for part in clean.split("-"):
+                if len(part) >= 2:
+                    result.add(part)
+        for p in morph.parse(clean):
+            result.add(p.normal_form)
+    return result
 
 
 def count_sentences(text: str) -> int:
@@ -142,6 +186,88 @@ def find_script_dishonesty(text: str) -> List[str]:
         if match:
             found.append(f"недопустимое выражение в скрипте: '{match.group(0)}'")
     return list(dict.fromkeys(found))
+
+
+def check_gender_consistency(
+    validation: str,
+    action_scripts: List[Any],
+    morph_analyzer: Optional[Any] = None,
+) -> List[str]:
+    """
+    Проверяет согласованность грамматического рода между validation (обращение к автору)
+    и action_scripts (реплики от первого лица автора) (Этап 3.13).
+    Если validation обращается к женщине (ждала, просила), а скрипт написан от мужчины (я сорвался),
+    или наоборот — возвращает ошибку RoleGenderMismatch.
+    """
+    if not validation or not action_scripts:
+        return []
+
+    morph = morph_analyzer or get_spell_morph()
+
+    # 1. Определение рода адресата в validation ("ты [не]? <глагол/причастие>")
+    val_fem_count = 0
+    val_masc_count = 0
+    for m in re.finditer(
+        r"\bты\s+(?:(?:не|тоже|вчера|уже|так|сильно|очень|только|просто|вновь|опять|снова|сама?)\s+){0,3}([а-яё]+)\b",
+        validation,
+        re.IGNORECASE,
+    ):
+        w = m.group(1).lower()
+        parses = morph.parse(w)
+        for p in parses:
+            if p.tag.POS in ("VERB", "ADJF", "ADJS", "PRTS"):
+                if p.tag.number == "sing":
+                    if p.tag.gender == "femn":
+                        val_fem_count += 1
+                        break
+                    elif p.tag.gender == "masc":
+                        val_masc_count += 1
+                        break
+
+    val_gender = None
+    if val_fem_count > 0 and val_masc_count == 0:
+        val_gender = "femn"
+    elif val_masc_count > 0 and val_fem_count == 0:
+        val_gender = "masc"
+
+    if not val_gender:
+        return []
+
+    # 2. Определение рода первого лица в скриптах ("я [не]? <прошедшее время/причастие/прилагательное>")
+    scr_fem_count = 0
+    scr_masc_count = 0
+    for s in action_scripts:
+        t = getattr(s, "text", None) or (s.get("text") if isinstance(s, dict) else str(s))
+        if not t:
+            continue
+        for m in re.finditer(
+            r"\bя\s+(?:(?:не|тоже|вчера|уже|так|сильно|очень|только|просто|вновь|опять|снова|сама?)\s+){0,3}([а-яё]+)\b",
+            t,
+            re.IGNORECASE,
+        ):
+            w = m.group(1).lower()
+            parses = morph.parse(w)
+            for p in parses:
+                if p.tag.POS in ("VERB", "ADJF", "ADJS", "PRTS"):
+                    if p.tag.tense == "past" or p.tag.POS in ("ADJF", "ADJS", "PRTS"):
+                        if p.tag.number == "sing":
+                            if p.tag.gender == "femn":
+                                scr_fem_count += 1
+                                break
+                            elif p.tag.gender == "masc":
+                                scr_masc_count += 1
+                                break
+
+    scr_gender = None
+    if scr_fem_count > 0 and scr_masc_count == 0:
+        scr_gender = "femn"
+    elif scr_masc_count > 0 and scr_fem_count == 0:
+        scr_gender = "masc"
+
+    if scr_gender and val_gender and scr_gender != val_gender:
+        return ["RoleGenderMismatch: скрипт написан от противоположного рода/лица"]
+
+    return []
 
 
 RUSSIAN_NUM_WORDS = {
@@ -215,13 +341,17 @@ def to_minute_set(durs: Any) -> Set[int]:
 
 def are_durations_consistent(durs1: Any, durs2: Any) -> bool:
     """
-    Проверяет согласованность двух наборов длительностей (Этап 3.10).
+    Проверяет согласованность двух наборов длительностей (Этап 3.10, 3.18).
     Нормализует в минуты (числа int) и считает согласованными, если:
     1. A == B
     2. Одно множество отличается от другого только числом, равным сумме остальных элементов (например, {10, 5} и {10, 5, 15})
     3. Сумма элементов одного равна единственному элементу другого (например, {10, 5} и {15})
     4. Одно множество содержит единственный элемент, равный максимальному элементу другого,
        при условии что остальные элементы суммируются в этот максимум (например, {10, 5, 15} и {15})
+    5. Общий максимальный тайминг ритуала совпадает (например, {20} и {2, 3, 20} при разбиении на микро-шаги)
+    6. Наличие общего согласованного времени ритуала (пересечение A & B не пусто)
+    7. Равенство сумм микро-шагов (sum(A) == sum(B))
+    8. Сумма одного множества входит в другое (sum(A) in B или sum(B) in A)
     """
     A = to_minute_set(durs1)
     B = to_minute_set(durs2)
@@ -233,7 +363,19 @@ def are_durations_consistent(durs1: Any, durs2: Any) -> bool:
     if A == B:
         return True
 
-    # 2. Одно множество отличается числом, равным сумме остальных элементов
+    # 2. Общий максимальный тайминг ритуала (например, {20} и {2, 3, 20})
+    if max(A) == max(B):
+        return True
+
+    # 3. Пересечение множеств (оба партнера упоминают один и тот же основной хронометраж)
+    if bool(A & B):
+        return True
+
+    # 4. Равенство сумм микро-шагов
+    if sum(A) == sum(B):
+        return True
+
+    # 5. Одно множество отличается числом, равным сумме остальных элементов
     if len(B - A) == 1:
         diff_elem = next(iter(B - A))
         remaining = B - {diff_elem}
@@ -246,13 +388,11 @@ def are_durations_consistent(durs1: Any, durs2: Any) -> bool:
         if remaining and sum(remaining) == diff_elem:
             return True
 
-    # 3. Сумма элементов одного равна единственному элементу другого
-    if len(B) == 1 and sum(A) == next(iter(B)):
-        return True
-    if len(A) == 1 and sum(B) == next(iter(A)):
+    # 6. Сумма элементов одного равна любому элементу другого
+    if sum(A) in B or sum(B) in A:
         return True
 
-    # 4. Единственный элемент одного входит в другое и равен сумме остальных элементов
+    # 7. Единственный элемент одного входит в другое и равен сумме остальных элементов
     if len(B) == 1 and next(iter(B)) in A:
         b_val = next(iter(B))
         rest = A - {b_val}
@@ -275,7 +415,7 @@ def validate_ritual_consistency(
     ritual_unfit_p2: bool = False,
 ) -> List[str]:
     """
-    Валидатор согласованности параметров ритуала (Этап 3.3, 3.10).
+    Валидатор согласованности параметров ритуала (Этап 3.3, 3.10, 3.18).
     Проверяет, что длительности в скриптах 2 обоих партнеров и в shared_advice согласованы.
     """
     errors: List[str] = []
@@ -283,19 +423,53 @@ def validate_ritual_consistency(
     dur_p2 = set(extract_durations(p2_script2_text)) if not ritual_unfit_p2 else set()
     dur_sh = set(extract_durations(shared_advice_text))
 
-    # Если в обоих скриптах указана длительность, они обязаны быть согласованы
-    if dur_p1 and dur_p2 and not are_durations_consistent(dur_p1, dur_p2):
-        errors.append(f"Длительности в скриптах #2 партнеров не согласованы: P1={dur_p1} vs P2={dur_p2}. Используй длительность из ritual.")
+    # Проверка скрипта 1 на согласованность с общим советом
+    p1_consistent_sh = (
+        not dur_sh
+        or not dur_p1
+        or are_durations_consistent(dur_sh, dur_p1)
+        or bool(dur_sh & dur_p1)
+    )
+
+    # Проверка скрипта 2 на согласованность с общим советом
+    p2_consistent_sh = (
+        not dur_sh
+        or not dur_p2
+        or are_durations_consistent(dur_sh, dur_p2)
+        or bool(dur_sh & dur_p2)
+    )
+
+    # Если общий совет содержит длительность и оба партнера согласованы с общим советом,
+    # они считаются взаимно согласованными (даже если один расписал микро-шаги)
+    if dur_sh and p1_consistent_sh and p2_consistent_sh:
+        pass
+    else:
+        # Если в обоих скриптах указана длительность, они обязаны быть согласованы
+        if dur_p1 and dur_p2 and not (are_durations_consistent(dur_p1, dur_p2) or bool(dur_p1 & dur_p2)):
+            errors.append(
+                f"Длительности в скриптах #2 партнеров не согласованы: P1={dur_p1} vs P2={dur_p2}. "
+                "Используй длительность из ritual."
+            )
 
     # Скрипт 1 должен согласовываться с общим советом
-    if dur_sh and dur_p1 and not (are_durations_consistent(dur_sh, dur_p1) or bool(dur_sh & dur_p1)):
-        errors.append(f"Длительность в скрипте #2 партнера 1 ({dur_p1}) не совпадает с общим ритуалом ({dur_sh}). Используй длительность из ritual.")
+    if dur_sh and dur_p1 and not p1_consistent_sh:
+        errors.append(
+            f"Длительность в скрипте #2 партнера 1 ({dur_p1}) не совпадает с общим ритуалом ({dur_sh}). "
+            "Используй длительность из ritual."
+        )
 
     # Скрипт 2 должен согласовываться с общим советом
-    if dur_sh and dur_p2 and not (are_durations_consistent(dur_sh, dur_p2) or bool(dur_sh & dur_p2)):
-        errors.append(f"Длительность в скрипте #2 партнера 2 ({dur_p2}) не совпадает с общим ритуалом ({dur_sh}). Используй длительность из ritual.")
+    if dur_sh and dur_p2 and not p2_consistent_sh:
+        errors.append(
+            f"Длительность в скрипте #2 партнера 2 ({dur_p2}) не совпадает с общим ритуалом ({dur_sh}). "
+            "Используй длительность из ritual."
+        )
 
     return errors
+
+
+# Алиас для совместимости (Этап 3.18)
+check_ritual_consistency = validate_ritual_consistency
 
 
 def validate_ritual_action_scripts_consistency(
@@ -304,8 +478,8 @@ def validate_ritual_action_scripts_consistency(
 ) -> List[str]:
     """
     Проверяет, что если в action_scripts упомянуты числа минут/длительности,
-    они согласуются с agreed_ritual.duration_minutes.
-    (Допускается совпадение или отсутствие упоминания конкретных минут; противоречие запрещено).
+    они согласуются с agreed_ritual.duration_minutes (Этап 3.18).
+    (Допускается совпадение, микро-шаги или отсутствие упоминания конкретных минут; явное противоречие запрещено).
     """
     errors: List[str] = []
     if not agreed_ritual:
@@ -317,10 +491,18 @@ def validate_ritual_action_scripts_consistency(
 
     for idx, s in enumerate(action_scripts or [], start=1):
         text = s.text or ""
-        matches = re.findall(r"\b(\d+)\s*(?:мин(?:ут[аы]?)?)\b", text, flags=re.IGNORECASE)
-        for m in matches:
-            val = int(m)
-            if val != target_minutes:
+        matches = [int(m) for m in re.findall(r"\b(\d+)\s*(?:мин(?:ут[аы]?)?)\b", text, flags=re.IGNORECASE)]
+        if not matches:
+            continue
+        # Если целевое время присутствует среди упоминаний или сумма чисел равна target_minutes — всё корректно
+        if target_minutes in matches or sum(matches) == target_minutes:
+            continue
+        # Если все числа строго меньше target_minutes (микро-шаги ритуала) и их сумма <= target_minutes — корректно
+        if all(m < target_minutes for m in matches) and sum(matches) <= target_minutes:
+            continue
+        # Проверяем на явное противоречие (например, указано 40 мин при ритуале 15 мин)
+        for val in matches:
+            if val != target_minutes and val > target_minutes:
                 errors.append(
                     f"В скрипте #{idx} указано {val} минут, что противоречит согласованному ритуалу ({target_minutes} минут)"
                 )
@@ -333,6 +515,7 @@ def align_action_scripts_with_ritual(
 ) -> List[ActionScriptItem]:
     """
     Автовыравнивание: приводит упоминания минут в action_scripts к параметрам agreed_ritual.
+    Мягко подтягивает длительность под согласованный ритуал, не повреждая микро-шаги (Этап 3.18).
     """
     if not agreed_ritual:
         return action_scripts
@@ -356,9 +539,17 @@ def align_action_scripts_with_ritual(
     aligned_scripts = []
     for s in action_scripts or []:
         text = s.text or ""
-        def _replace_minutes(match):
+        matches = [int(m) for m in re.findall(r"\b(\d+)\s*(?:мин(?:ут[аы]?)?)\b", text, flags=re.IGNORECASE)]
+
+        # Если целевое время уже присутствует или микро-шаги суммируются в target_minutes — текст не трогаем!
+        if target_minutes in matches or (matches and sum(matches) == target_minutes):
+            aligned_scripts.append(s)
+            continue
+
+        # Заменяем упоминание минут, только если оно противоречит ритуалу (больше целевого или единственный тайминг)
+        def _replace_minutes(match: re.Match) -> str:
             val = int(match.group(1))
-            if val != target_minutes:
+            if val != target_minutes and (val > target_minutes or len(matches) == 1):
                 return target_phrase
             return match.group(0)
 
@@ -377,6 +568,7 @@ def validate_partner_card(
     card: PartnerResponse,
     is_high_risk: bool = False,
     sparse: bool = False,
+    not_applicable: bool = False,
 ) -> List[str]:
     """
     Валидация качества персональной карточки партнера (Шаг B1/B2).
@@ -388,6 +580,10 @@ def validate_partner_card(
         fb = find_forbidden_in_string(card.validation)
         if fb:
             errors.append(f"В safety message найдены запрещенные элементы: {', '.join(fb)}")
+        return errors
+
+    if not_applicable or getattr(card, "not_applicable", False) or "не подлежит разбору" in (card.validation or ""):
+        # Системный отказ при нерелевантном вводе (not_applicable): пропускается без проверки полей карточки (Этап 3.16)
         return errors
 
     # 1. Проверка поля validation
@@ -496,6 +692,10 @@ def validate_partner_card(
             if fb_label:
                 errors.append(f"В label скрипта #{idx} обнаружены запрещенные слова: {', '.join(fb_label)}")
 
+        # 4.1 Проверка согласованности грамматического рода (Этап 3.13)
+        gender_errs = check_gender_consistency(val_text, scripts)
+        errors.extend(gender_errs)
+
     # 5. Проверка safety_note (если присутствует)
     if card.safety_note:
         fb_sn = find_forbidden_in_string(card.safety_note)
@@ -505,12 +705,21 @@ def validate_partner_card(
     return errors
 
 
-def validate_shared_summary(shared: SharedSummary, is_high_risk: bool = False) -> List[str]:
+def validate_shared_summary(
+    shared: SharedSummary,
+    is_high_risk: bool = False,
+    not_applicable: bool = False,
+) -> List[str]:
     """
     Валидация качества общего итога для пары (Шаг C).
     """
     errors: List[str] = []
-    if is_high_risk:
+    if (
+        is_high_risk
+        or not_applicable
+        or getattr(shared, "not_applicable", False)
+        or "не подлежит разбору" in (shared.situation_overview or "")
+    ):
         return errors
 
     overview_text = shared.situation_overview or ""
@@ -525,6 +734,10 @@ def validate_shared_summary(shared: SharedSummary, is_high_risk: bool = False) -
     s_advice = count_sentences(advice_text)
     if s_advice < 2:
         errors.append(f"В shared_advice недостаточно предложений ({s_advice} < 2)")
+
+    s_starter = count_sentences(starter_text)
+    if s_starter < 1:
+        errors.append(f"В conversation_starter недостаточно предложений ({s_starter} < 1)")
 
     # Проверка глобальных запрещенных стемов во всех полях
     for name, text in [
@@ -563,6 +776,12 @@ def validate_full_mediator_output(
 ) -> List[str]:
     """Полная сквозная проверка всего агрегированного вывода перед записью в БД."""
     all_errors: List[str] = []
+    if getattr(mediator_output, "not_applicable", False) or (
+        mediator_output.partner_1_response
+        and "не подлежит разбору" in (mediator_output.partner_1_response.validation or "")
+    ):
+        return all_errors
+
     is_high = (mediator_output.risk_level == "high")
 
     errs_p1 = validate_partner_card(

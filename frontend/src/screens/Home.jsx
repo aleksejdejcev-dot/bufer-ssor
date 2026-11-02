@@ -15,7 +15,8 @@ import {
   CheckCircle2,
   Trash2,
   Lock,
-  ArrowRight
+  ArrowRight,
+  History
 } from 'lucide-react';
 import WebApp from '@twa-dev/sdk';
 import { api } from '../api/client';
@@ -38,6 +39,8 @@ export default function Home({ meData, onStartSession, onOpenActiveSession, onRe
   const [isHintOpen, setIsHintOpen] = useState(false);
   const [isConfirmDeleteOpen, setIsConfirmDeleteOpen] = useState(false);
   const [isDeletingCouple, setIsDeletingCouple] = useState(false);
+  const [isConfirmHistoryOpen, setIsConfirmHistoryOpen] = useState(false);
+  const [isDeletingHistory, setIsDeletingHistory] = useState(false);
   const [activeLegalDoc, setActiveLegalDoc] = useState(null);
   const [whiteFlagSuccess, setWhiteFlagSuccess] = useState(false);
   const [isSendingWhiteFlag, setIsSendingWhiteFlag] = useState(false);
@@ -185,6 +188,20 @@ export default function Home({ meData, onStartSession, onOpenActiveSession, onRe
     }
   };
 
+  // Очистка истории сессий пары
+  const handleConfirmDeleteHistory = async () => {
+    setIsDeletingHistory(true);
+    try {
+      WebApp.HapticFeedback?.notificationOccurred('warning');
+      await api.deleteHistory();
+      setIsConfirmHistoryOpen(false);
+      await onRefreshProfile();
+    } catch (err) {
+      setGlobalError(err.message || 'Ошибка очистки истории');
+      setIsDeletingHistory(false);
+    }
+  };
+
   return (
     <div className="min-h-screen flex flex-col justify-between p-4 sm:p-5 max-w-md mx-auto animate-fade-in bg-slate-50/50 dark:bg-zinc-950">
       <div className="space-y-4">
@@ -207,14 +224,19 @@ export default function Home({ meData, onStartSession, onOpenActiveSession, onRe
           </div>
 
           {couple && (
-            <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-100 dark:bg-zinc-800/80 text-xs text-slate-600 dark:text-slate-300 font-medium border border-slate-200/60 dark:border-zinc-700/60">
+            <button
+              onClick={() => onPaywallRequired && onPaywallRequired()}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-100 hover:bg-slate-200/70 dark:bg-zinc-800/80 dark:hover:bg-zinc-700/80 text-xs text-slate-600 dark:text-slate-300 font-medium border border-slate-200/60 dark:border-zinc-700/60 transition-colors cursor-pointer"
+            >
               <Sparkles size={12} className="text-amber-500" />
               <span>
-                {couple.free_sessions_left > 0
+                {couple.subscription_until && new Date(couple.subscription_until) > new Date()
+                  ? 'Подписка активна'
+                  : couple.free_sessions_left > 0
                   ? `Разборов: ${couple.free_sessions_left}`
-                  : 'Лимит исчерпан'}
+                  : 'Оформить подписку'}
               </span>
-            </div>
+            </button>
           )}
         </div>
 
@@ -446,13 +468,21 @@ export default function Home({ meData, onStartSession, onOpenActiveSession, onRe
           </button>
         </div>
 
-        <div>
+        <div className="flex items-center justify-center gap-2 pt-1">
+          <button
+            onClick={() => setIsConfirmHistoryOpen(true)}
+            className="inline-flex items-center gap-1 text-[11px] text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 font-medium py-1 px-2 rounded-lg hover:bg-slate-100 dark:hover:bg-zinc-800 transition-colors"
+          >
+            <History size={12} />
+            <span>Очистить историю</span>
+          </button>
+          <span className="text-slate-300 dark:text-zinc-700">•</span>
           <button
             onClick={() => setIsConfirmDeleteOpen(true)}
-            className="inline-flex items-center gap-1.5 text-[11px] text-rose-500 hover:text-rose-700 dark:text-rose-400 dark:hover:text-rose-300 font-medium py-1 px-2.5 rounded-lg hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors"
+            className="inline-flex items-center gap-1 text-[11px] text-rose-500 hover:text-rose-700 dark:text-rose-400 dark:hover:text-rose-300 font-medium py-1 px-2 rounded-lg hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors"
           >
             <Trash2 size={12} />
-            <span>Удалить все наши данные</span>
+            <span>Удалить пару</span>
           </button>
         </div>
       </div>
@@ -461,6 +491,17 @@ export default function Home({ meData, onStartSession, onOpenActiveSession, onRe
       <HintModal
         isOpen={isHintOpen}
         onClose={() => setIsHintOpen(false)}
+      />
+
+      <ConfirmModal
+        isOpen={isConfirmHistoryOpen}
+        onClose={() => setIsConfirmHistoryOpen(false)}
+        onConfirm={handleConfirmDeleteHistory}
+        isDeleting={isDeletingHistory}
+        isSingleStep={true}
+        title="Очистить историю разборов?"
+        description="Все завершенные сессии и карточки разбора будут удалены. Связка в паре и подписка останутся."
+        confirmText="Очистить историю"
       />
 
       <ConfirmModal
