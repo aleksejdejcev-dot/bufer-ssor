@@ -3,7 +3,6 @@ uvicorn[standard]==0.54.0
 pydantic==2.13.5
 pydantic-settings==2.16.2
 aiogram==3.31.0
-aiohttp-socks==0.10.1
 asyncpg==0.32.0
 cryptography==43.0.3
 google-genai==2.34.0

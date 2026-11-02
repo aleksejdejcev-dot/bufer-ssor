@@ -12,12 +12,12 @@ def test_telegram_api_base_url_configuration(monkeypatch):
     from aiogram.client.session.aiohttp import AiohttpSession
     from aiogram.client.telegram import TelegramAPIServer
 
-    monkeypatch.setattr(settings, "TELEGRAM_API_BASE_URL", "https://tg-api.proxy.nl")
+    monkeypatch.setattr(settings, "TELEGRAM_API_BASE_URL", "https://tg-proxy.aleksejdejcev62.workers.dev")
     api_server = TelegramAPIServer.from_base(settings.TELEGRAM_API_BASE_URL)
     session = AiohttpSession(api=api_server, timeout=15.0)
     test_bot = Bot(token="123456789:dummy_token", session=session)
 
-    assert test_bot.session.api.base == "https://tg-api.proxy.nl/bot{token}/{method}"
+    assert test_bot.session.api.base == "https://tg-proxy.aleksejdejcev62.workers.dev/bot{token}/{method}"
     assert test_bot.token == "123456789:dummy_token"
 
 
