@@ -507,10 +507,21 @@ class InMemoryRepo:
         return list(self.couples.values())
 
     def get_admin_stats(self) -> Dict[str, Any]:
+        paired = sum(1 for c in self.couples.values() if c.get("user2_id"))
+        waiting = sum(1 for c in self.couples.values() if not c.get("user2_id"))
+        completed = sum(1 for s in self.conflict_sessions.values() if s.get("status") == "completed")
+        active = sum(1 for s in self.conflict_sessions.values() if s.get("status") not in ("completed", "cancelled"))
+        high_risk = sum(1 for s in self.conflict_sessions.values() if s.get("risk_level") in ("high", "critical"))
         return {
             "total_users": len(self.users),
+            "active_users": len(self.users),
             "total_couples": len(self.couples),
+            "paired_couples": paired,
+            "waiting_couples": waiting,
             "total_sessions": len(self.conflict_sessions),
+            "completed_sessions": completed,
+            "active_sessions": active,
+            "high_risk_sessions": high_risk,
         }
 
     def check_rate_limit(self, key: str, max_requests: int, window_seconds: int) -> Tuple[bool, int]:

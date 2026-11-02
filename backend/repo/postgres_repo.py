@@ -729,13 +729,24 @@ class PostgresRepo:
         async def _impl():
             pool = await self._get_pool()
             async with pool.acquire() as conn:
+                total_users = await conn.fetchval("SELECT count(*) FROM users;")
                 total_couples = await conn.fetchval("SELECT count(*) FROM couples;")
+                paired_couples = await conn.fetchval("SELECT count(*) FROM couples WHERE user2_id IS NOT NULL;")
+                waiting_couples = await conn.fetchval("SELECT count(*) FROM couples WHERE user2_id IS NULL;")
                 total_sessions = await conn.fetchval("SELECT count(*) FROM conflict_sessions;")
                 completed_sessions = await conn.fetchval("SELECT count(*) FROM conflict_sessions WHERE status = 'completed';")
+                active_sessions = await conn.fetchval("SELECT count(*) FROM conflict_sessions WHERE status NOT IN ('completed', 'cancelled');")
+                high_risk_sessions = await conn.fetchval("SELECT count(*) FROM conflict_sessions WHERE risk_level IN ('high', 'critical');")
                 return {
+                    "total_users": total_users or 0,
+                    "active_users": total_users or 0,
                     "total_couples": total_couples or 0,
+                    "paired_couples": paired_couples or 0,
+                    "waiting_couples": waiting_couples or 0,
                     "total_sessions": total_sessions or 0,
                     "completed_sessions": completed_sessions or 0,
+                    "active_sessions": active_sessions or 0,
+                    "high_risk_sessions": high_risk_sessions or 0,
                 }
         return self._run_async(_impl())
 

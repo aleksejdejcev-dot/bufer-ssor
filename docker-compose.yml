@@ -26,6 +26,7 @@ services:
     env_file:
       - .env
     environment:
+      - PYTHONUNBUFFERED=1
       - DATABASE_URL=postgresql://${POSTGRES_USER:-buffer_admin}:${POSTGRES_PASSWORD:-buffer_dev_pass}@postgres:5432/${POSTGRES_DB:-buffer_ssor}
       - TELEGRAM_API_BASE_URL=${TELEGRAM_API_BASE_URL:-https://tg-proxy.aleksejdejcev62.workers.dev}
     extra_hosts:

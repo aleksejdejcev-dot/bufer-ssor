@@ -110,19 +110,25 @@ def get_admin_main_keyboard() -> InlineKeyboardMarkup:
 
 def format_admin_stats_text() -> str:
     """Форматирование аналитической сводки для админа"""
-    stats = db.get_admin_stats()
+    try:
+        stats = db.get_admin_stats() or {}
+    except Exception as e:
+        logger.error("Failed to fetch admin stats: %s", e)
+        stats = {}
+
     return (
         "👑 <b>Панель администратора «Буфер Ссор»</b>\n\n"
         "👥 <b>Пользователи и пары:</b>\n"
-        f"• Всего зарегистрировано: <b>{stats['total_users']}</b>\n"
-        f"• Всего создано пар: <b>{stats['total_couples']}</b>\n"
-        f"• Активных пар (оба партнёра): <b>{stats['paired_couples']}</b>\n"
-        f"• Ожидают подключения: <b>{stats['waiting_couples']}</b>\n\n"
+        f"• Всего зарегистрировано: <b>{stats.get('total_users', 0)}</b>\n"
+        f"• Активных пользователей: <b>{stats.get('active_users', 0)}</b>\n"
+        f"• Всего создано пар: <b>{stats.get('total_couples', 0)}</b>\n"
+        f"• Активных пар (оба партнёра): <b>{stats.get('paired_couples', 0)}</b>\n"
+        f"• Ожидают подключения: <b>{stats.get('waiting_couples', 0)}</b>\n\n"
         "💬 <b>Сессии и разборы конфликтов:</b>\n"
-        f"• Всего запущено: <b>{stats['total_sessions']}</b>\n"
-        f"• Успешно завершено: <b>{stats['completed_sessions']}</b>\n"
-        f"• В процессе ожидания/анализа: <b>{stats['active_sessions']}</b>\n"
-        f"• Случаев высокого риска (кризис): <b>{stats['high_risk_sessions']}</b>\n\n"
+        f"• Всего запущено: <b>{stats.get('total_sessions', 0)}</b>\n"
+        f"• Успешно завершено: <b>{stats.get('completed_sessions', 0)}</b>\n"
+        f"• В процессе ожидания/анализа: <b>{stats.get('active_sessions', 0)}</b>\n"
+        f"• Случаев высокого риска (кризис): <b>{stats.get('high_risk_sessions', 0)}</b>\n\n"
         "🔒 <i>Режим тайны исповеди: личные аудиозаписи и тексты шифруются и не отображаются.</i>"
     )
 
@@ -323,7 +329,7 @@ async def handle_admin_couples_callback(callback: CallbackQuery):
     buttons = []
 
     for i, c in enumerate(couples, 1):
-        c_id = c["id"]
+        c_id = c.get("id")
         code = c.get("invite_code", "------")
         p1 = c.get("partner_1_id")
         p2 = c.get("partner_2_id")
@@ -331,8 +337,8 @@ async def handle_admin_couples_callback(callback: CallbackQuery):
 
         p1_user = db.get_user(p1) if p1 else None
         p2_user = db.get_user(p2) if p2 else None
-        p1_name = p1_user["first_name"] if p1_user else f"ID {p1}"
-        p2_name = (p2_user["first_name"] if p2_user else f"ID {p2}") if p2 else "ждём..."
+        p1_name = p1_user.get("first_name", f"ID {p1}") if p1_user else f"ID {p1}"
+        p2_name = (p2_user.get("first_name", f"ID {p2}") if p2_user else f"ID {p2}") if p2 else "ждём..."
 
         text += (
             f"<b>{i}. Код: <code>{code}</code></b>\n"

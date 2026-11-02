@@ -99,19 +99,17 @@ mood_limiter = InMemoryRateLimiter(max_requests=15, window_seconds=60)          
 
 
 # ==============================================================================
-# Фоновый воркер взаимодействия с Telegram Bot API
+# Фоновый воркер взаимодействия с Telegram Bot API (Автономный Long Polling)
 # ==============================================================================
 
 async def _telegram_startup_worker():
     """
-    Фоновый воркер подключения к Telegram Bot API и настройки вебхука/polling.
+    Фоновый воркер подключения к Telegram Bot API и запуска Long Polling.
     Работает асинхронно, не блокируя запуск HTTP-сервера FastAPI (lifespan).
-    При сбоях сети или недоступности api.telegram.org выполняет повторные попытки с backoff.
+    При сбоях сети или недоступности Telegram API выполняет повторные попытки с backoff.
     Никогда не вызывает sys.exit() и не прерывает работу основного сервиса.
     """
     global bot_username_cache
-    webhook_base = (settings.WEBHOOK_BASE_URL or "").strip().lower()
-    is_polling = webhook_base in ("polling", "", "none") or "test.ngrok.app" in webhook_base
 
     # 1. Попытка получить информацию о боте (get_me) с ретраями
     backoff = 3
@@ -144,49 +142,23 @@ async def _telegram_startup_worker():
                 return
             backoff = min(backoff * 2, max_backoff)
 
-    # 2. Настройка Webhook или Polling
-    if is_polling:
-        logger.info("Configuring Telegram bot in Long Polling mode...")
-        while True:
+    # 2. Очистка вебхука перед стартом опроса (drop_pending_updates=True) и запуск Long Polling
+    while True:
+        try:
+            logger.info("Deleting Telegram webhook before long polling (drop_pending_updates=True)...")
+            await asyncio.wait_for(bot.delete_webhook(drop_pending_updates=True), timeout=10.0)
+            logger.info("Telegram webhook removed. Starting background long polling...")
+            await dp.start_polling(bot, handle_signals=False, allowed_updates=["message", "callback_query"])
+            break
+        except asyncio.CancelledError:
+            logger.info("Telegram polling cancelled")
+            break
+        except Exception as e:
+            logger.warning("Failed during Telegram polling start (%s). Retrying in 5s...", e)
             try:
-                await asyncio.wait_for(bot.delete_webhook(drop_pending_updates=False), timeout=10.0)
-                logger.info("Telegram webhook removed, starting long polling...")
-                await dp.start_polling(bot, allowed_updates=["message", "callback_query"])
-                break
+                await asyncio.sleep(5)
             except asyncio.CancelledError:
-                logger.info("Telegram polling cancelled")
                 break
-            except Exception as e:
-                logger.warning("Failed during Telegram polling start (%s). Retrying in 5s...", e)
-                try:
-                    await asyncio.sleep(5)
-                except asyncio.CancelledError:
-                    break
-    else:
-        webhook_url = f"{settings.WEBHOOK_BASE_URL.rstrip('/')}/api/webhook"
-        logger.info("Configuring Telegram webhook for URL: %s", webhook_url)
-        while True:
-            try:
-                await asyncio.wait_for(
-                    bot.set_webhook(
-                        url=webhook_url,
-                        secret_token=settings.TELEGRAM_WEBHOOK_SECRET,
-                        allowed_updates=["message", "callback_query"],
-                        drop_pending_updates=False,
-                    ),
-                    timeout=10.0,
-                )
-                logger.info("Telegram webhook configured successfully: %s", webhook_url)
-                break
-            except asyncio.CancelledError:
-                logger.info("Telegram webhook setup cancelled")
-                break
-            except Exception as e:
-                logger.warning("Failed to set Telegram webhook (%s). Retrying in 10s...", e)
-                try:
-                    await asyncio.sleep(10)
-                except asyncio.CancelledError:
-                    break
 
 
 # ==============================================================================
@@ -206,24 +178,31 @@ async def lifespan(app: FastAPI):
         )
     )
 
-    # 2. Запускаем неблокирующий фоновый воркер взаимодействия с Telegram
-    telegram_task = asyncio.create_task(_telegram_startup_worker())
+    # 2. Запускаем автономный фоновый Long Polling воркер Telegram
+    polling_task = asyncio.create_task(_telegram_startup_worker())
 
     # Мгновенно передаем управление Uvicorn для открытия HTTP-порта 8000
     yield
 
-    # Корректное завершение фоновых задач
-    telegram_task.cancel()
+    # Корректное завершение фоновых задач (Shutdown)
+    logger.info("Stopping Telegram long polling and background tasks...")
+    try:
+        await dp.stop_polling()
+    except Exception as e:
+        logger.debug("dp.stop_polling exception on shutdown: %s", e)
+
+    polling_task.cancel()
     retention_task.cancel()
     try:
-        await asyncio.gather(telegram_task, retention_task, return_exceptions=True)
+        await asyncio.gather(polling_task, retention_task, return_exceptions=True)
     except Exception:
         pass
 
     try:
         await bot.session.close()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("bot.session.close exception on shutdown: %s", e)
+
     logger.info("App shutdown complete")
 
 
@@ -410,49 +389,27 @@ async def healthcheck():
     }
 
 
-@app.post("/api/webhook")
-async def telegram_webhook(
-    request: Request,
-    secret_token: Optional[str] = Header(None, alias="X-Telegram-Bot-Api-Secret-Token"),
-):
-    """Прием входящих апдейтов от Telegram Bot API с валидацией секрета"""
-    if secret_token != settings.TELEGRAM_WEBHOOK_SECRET:
-        logger.warning("Webhook received invalid secret token")
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid webhook secret")
-
-    try:
-        update_data = await request.json()
-        update = Update.model_validate(update_data, context={"bot": bot})
-        await dp.feed_update(bot=bot, update=update)
-        return {"ok": True}
-    except Exception as e:
-        logger.error("Error processing telegram webhook update: %s", e)
-        return {"ok": False}
-
-
-@app.post("/api/telegram/setup-webhook")
-async def setup_telegram_webhook_endpoint(
-    secret_token: Optional[str] = Header(None, alias="X-Telegram-Bot-Api-Secret-Token"),
-):
-    """Принудительная настройка или обновление вебхука Telegram."""
-    if secret_token != settings.TELEGRAM_WEBHOOK_SECRET:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid webhook secret")
-
-    webhook_url = f"{settings.WEBHOOK_BASE_URL.rstrip('/')}/api/webhook"
-    try:
-        await asyncio.wait_for(
-            bot.set_webhook(
-                url=webhook_url,
-                secret_token=settings.TELEGRAM_WEBHOOK_SECRET,
-                allowed_updates=["message", "callback_query"],
-                drop_pending_updates=False,
-            ),
-            timeout=10.0,
-        )
-        return {"status": "ok", "webhook_url": webhook_url}
-    except Exception as e:
-        logger.error("Failed to set webhook manually: %s", e)
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(e))
+# ==============================================================================
+# Telegram Webhook (ОТКЛЮЧЕН: бот полностью переведен на автономный Long Polling)
+# ==============================================================================
+# @app.post("/api/webhook")
+# async def telegram_webhook(
+#     request: Request,
+#     secret_token: Optional[str] = Header(None, alias="X-Telegram-Bot-Api-Secret-Token"),
+# ):
+#     """Прием входящих апдейтов от Telegram Bot API с валидацией секрета"""
+#     if secret_token != settings.TELEGRAM_WEBHOOK_SECRET:
+#         logger.warning("Webhook received invalid secret token")
+#         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid webhook secret")
+#
+#     try:
+#         update_data = await request.json()
+#         update = Update.model_validate(update_data, context={"bot": bot})
+#         await dp.feed_update(bot=bot, update=update)
+#         return {"ok": True}
+#     except Exception as e:
+#         logger.error("Error processing telegram webhook update: %s", e)
+#         return {"ok": False}
 
 
 @app.post("/api/webhook/yookassa")

@@ -502,16 +502,11 @@ async def test_rate_limiter_blocks_flooding():
 
 
 @pytest.mark.asyncio
-async def test_webhook_secret_verification():
-    """Проверка защиты вебхука по secret token"""
+async def test_webhook_endpoint_disabled():
+    """Проверка отключения вебхука при переходе на автономный Long Polling"""
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
-        # Неверный секрет
-        r = await ac.post("/api/webhook", json={"update_id": 1}, headers={"X-Telegram-Bot-Api-Secret-Token": "wrong_secret"})
-        assert r.status_code == 403
-
-        # Верный секрет (из настроек приложения)
-        r = await ac.post("/api/webhook", json={"update_id": 1}, headers={"X-Telegram-Bot-Api-Secret-Token": settings.TELEGRAM_WEBHOOK_SECRET})
-        assert r.status_code == 200
-        assert r.json()["ok"] is True
+        r = await ac.post("/api/webhook", json={"update_id": 1})
+        # В связи с монтированием фронтенда на '/', немаршрутизированные POST-запросы возвращают 404/405
+        assert r.status_code in (404, 405)
 
