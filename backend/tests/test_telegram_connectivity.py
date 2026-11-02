@@ -1,57 +1,24 @@
 import pytest
 import asyncio
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import AsyncMock, MagicMock
 from httpx import AsyncClient, ASGITransport
 
 from config import settings
-from bot import _get_telegram_proxy, _resolve_proxy_for_env
 from main import app, _telegram_startup_worker
 
 
-@pytest.mark.asyncio
-async def test_telegram_proxy_resolution(monkeypatch):
-    monkeypatch.setattr(settings, "TELEGRAM_PROXY", "socks5://proxy.example.com:1080")
-    assert _get_telegram_proxy() == "socks5://proxy.example.com:1080"
-
-    monkeypatch.setattr(settings, "TELEGRAM_PROXY", "")
-    monkeypatch.setattr(settings, "HTTPS_PROXY", "http://proxy.https:8080")
-    assert _get_telegram_proxy() == "http://proxy.https:8080"
-
-
-@pytest.mark.asyncio
-async def test_telegram_proxy_docker_resolution(monkeypatch):
-    monkeypatch.setattr("os.path.exists", lambda path: path == "/.dockerenv")
-    with patch("socket.gethostbyname", return_value="192.168.65.2"):
-        res = _resolve_proxy_for_env("http://127.0.0.1:10808")
-        assert res == "http://host.docker.internal:10808"
-
-
-@pytest.mark.asyncio
-async def test_telegram_proxy_torproxy_host_resolution(monkeypatch):
-    import socket
-    monkeypatch.setattr("os.path.exists", lambda path: False)
-    def fake_gethostbyname(hostname):
-        if hostname == "torproxy":
-            raise socket.gaierror("Name or service not known")
-        return "127.0.0.1"
-    monkeypatch.setattr("socket.gethostbyname", fake_gethostbyname)
-
-    res = _resolve_proxy_for_env("socks5://torproxy:9050")
-    assert res == "socks5://127.0.0.1:9050"
-
-
-def test_bot_initialization_with_socks5_proxy(monkeypatch):
+def test_telegram_api_base_url_configuration(monkeypatch):
     from aiogram import Bot
     from aiogram.client.session.aiohttp import AiohttpSession
+    from aiogram.client.telegram import TelegramAPIServer
 
-    monkeypatch.setattr(settings, "TELEGRAM_PROXY", "socks5://torproxy:9050")
-    proxy = _get_telegram_proxy()
-    assert proxy == "socks5://torproxy:9050"
+    monkeypatch.setattr(settings, "TELEGRAM_API_BASE_URL", "https://tg-api.proxy.nl")
+    api_server = TelegramAPIServer.from_base(settings.TELEGRAM_API_BASE_URL)
+    session = AiohttpSession(api=api_server, timeout=15.0)
+    test_bot = Bot(token="123456789:dummy_token", session=session)
 
-    session = AiohttpSession(proxy=proxy, timeout=15.0)
-    test_bot = Bot(token="123456789:dummy_token_test", session=session)
-    assert test_bot.session is session
-    assert test_bot.token == "123456789:dummy_token_test"
+    assert test_bot.session.api.base == "https://tg-api.proxy.nl/bot{token}/{method}"
+    assert test_bot.token == "123456789:dummy_token"
 
 
 @pytest.mark.asyncio

@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     TELEGRAM_BOT_TOKEN: str = ""
     TELEGRAM_WEBHOOK_SECRET: str = ""
     WEBHOOK_BASE_URL: str = ""
-    TELEGRAM_PROXY: Optional[str] = None
+    TELEGRAM_API_BASE_URL: Optional[str] = None
 
     # Выбор LLM-провайдера (gigachat | gemini)
     LLM_PROVIDER: str = "gigachat"
