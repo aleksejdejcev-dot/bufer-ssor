@@ -11,11 +11,14 @@ from validators import (
     validate_ritual_consistency,
     are_durations_consistent,
     find_script_dishonesty,
+    check_gender_consistency,
     sanitize_minor_banned_words,
     is_unknown_word,
+    extract_user_input_words,
     GLOBAL_FORBIDDEN_PATTERNS,
     SHARED_FORBIDDEN_PATTERNS,
 )
+from config.banned import SPELL_WHITELIST
 from config.fallbacks import (
     FALLBACK_VALIDATION,
     FALLBACK_PARTNER_PERSPECTIVE,
@@ -518,6 +521,341 @@ def test_stage_3_11_build_deterministic_ritual_script():
     assert "Предлагаю попробовать новое правило:" in script_text
     assert ("48 часов" in script_text or "20-минутный" in script_text)
     assert script_text.endswith("Что скажешь?")
+
+
+def test_stage_3_12_stress_samples_and_mutual_secrets():
+    """Проверка набора stress_samples.json и барьера утечек для взаимных тайн (Кейс 17)."""
+    import json
+    from pathlib import Path
+    from leak_guard import check_card_lemma_leaks, check_shared_lemma_leaks
+
+    stress_file = Path(__file__).resolve().parent / "stress_samples.json"
+    assert stress_file.exists(), "stress_samples.json must exist"
+
+    with open(stress_file, "r", encoding="utf-8") as f:
+        cases = json.load(f)
+
+    case_ids = [c["id"] for c in cases]
+    assert len(cases) == 9
+    assert "17_mutual_secrets_trap" in case_ids
+    assert "18_raw_forwarded_chat" in case_ids
+    assert "19_self_harm_blackmail" in case_ids
+    assert "20_long_distance_schedules" in case_ids
+    assert "21_not_applicable_prank" in case_ids
+    assert "22_sarcasm_and_self_blame" in case_ids
+    assert "23_gaslighting_exhaustion" in case_ids
+    assert "24_parenting_clash_public" in case_ids
+    assert "25_digital_jealousy_likes" in case_ids
+
+    # Проверка спец-флагов
+    c19 = next(c for c in cases if c["id"] == "19_self_harm_blackmail")
+    assert c19["expected_risk"] == "high"
+
+    c23 = next(c for c in cases if c["id"] == "23_gaslighting_exhaustion")
+    assert c23["expected_risk"] == "elevated"
+
+    c21 = next(c for c in cases if c["id"] == "21_not_applicable_prank")
+    assert c21.get("not_applicable") is True
+
+    # Проверка барьера тайн для кейса 17:
+    # P1 секреты: сократили в агентстве, уходит в кафе с ноутбуком
+    # P2 секреты: перевел 150 тысяч Тимуру закрыть долг у букмекеров
+    p1_raw = "Мы уже третий день спорим из-за отеля..."
+    p2_raw = "Ссоримся из-за выбора отеля на отпуск..."
+
+    p1_secrets = ["сократили две недели назад в агентстве", "каждое утро сидит в кафе с ноутбуком"]
+    p2_secrets = ["перевёл 150 тысяч отпускных Тимуру", "долг у букмекеров"]
+
+    # Если карточка P1 случайно содержит детали P2 (букмекер / Тимур / 150 тысяч)
+    leaked_card_p1 = "Я понимаю твои переживания. Надеюсь, Тимур вернет долг 150 тысяч от букмекеров."
+    leaks_p1 = check_card_lemma_leaks(
+        card_text=leaked_card_p1,
+        other_private_facts=[],
+        other_secrets=p2_secrets,
+        recipient_raw=p1_raw,
+        recipient_facts=[],
+        facts_known_to_both=[],
+    )
+    assert len(leaks_p1) > 0, "Lemma leak must catch secrets of partner 2 in card of partner 1"
+
+    # Если карточка P2 случайно содержит детали P1 (сократили в агентстве / сидит в кафе)
+    leaked_card_p2 = "Понятно твоё желание определиться с отелем, пока тебя сократили в агентстве и ты в кафе."
+    leaks_p2 = check_card_lemma_leaks(
+        card_text=leaked_card_p2,
+        other_private_facts=[],
+        other_secrets=p1_secrets,
+        recipient_raw=p2_raw,
+        recipient_facts=[],
+        facts_known_to_both=[],
+    )
+    assert len(leaks_p2) > 0, "Lemma leak must catch secrets of partner 1 in card of partner 2"
+
+    # Если в общем итоге есть любая из тайн
+    leaked_shared = "Вам обоим сейчас непросто, особенно когда есть долг у букмекера и увольнение из агентства."
+    shared_leaks = check_shared_lemma_leaks(
+        shared_text=leaked_shared,
+        all_private_facts=[],
+        all_secrets=p1_secrets + p2_secrets,
+        facts_known_to_both=[],
+    )
+    assert len(shared_leaks) > 0, "Shared lemma leak must catch any secret mentioned in shared summary"
+
+
+def test_not_applicable_constants_validity():
+    """Тест валидности детерминированных NOT_APPLICABLE_CARD и NOT_APPLICABLE_SHARED (Этап 3.13)."""
+    from config.fallbacks import NOT_APPLICABLE_CARD, NOT_APPLICABLE_SHARED
+
+    card = PartnerResponse(**NOT_APPLICABLE_CARD)
+    card_errs = validate_partner_card(card, is_high_risk=False, sparse=False)
+    assert not card_errs, f"NOT_APPLICABLE_CARD failed validation: {card_errs}"
+
+    shared = SharedSummary(**NOT_APPLICABLE_SHARED)
+    shared_errs = validate_shared_summary(shared, is_high_risk=False)
+    assert not shared_errs, f"NOT_APPLICABLE_SHARED failed validation: {shared_errs}"
+
+
+def test_forbidden_script_patterns_expanded():
+    """Тест перехвата «Мне очень жаль» и «Прости меня» в action_scripts (Этап 3.13)."""
+    for bad_phrase in [
+        "Мне очень жаль, что я сорвался",
+        "Мне правда жаль, что всё так получилось",
+        "Мне искренне жаль за вчерашнее",
+        "Прости меня, я был неправ",
+        "Прости, давай поговорим",
+        "Извини меня за резкость",
+    ]:
+        card = PartnerResponse(
+            validation=FALLBACK_VALIDATION,
+            partner_perspective=FALLBACK_PARTNER_PERSPECTIVE,
+            blind_spot=FALLBACK_BLIND_SPOT,
+            action_scripts=[
+                ActionScriptItem(label="Сообщение прямо сейчас", text=bad_phrase),
+                ActionScriptItem(label="Предложение на сегодня или завтра", text="Предлагаю сегодня спокойно поговорить на 15 минут."),
+            ],
+        )
+        errs = validate_partner_card(card, is_high_risk=False)
+        assert any("недопустимое выражение в скрипте" in e for e in errs), f"Expected script dishonesty error for '{bad_phrase}', got: {errs}"
+
+
+def test_role_gender_mismatch_detection():
+    """Тест перехвата рассогласования пола (RoleGenderMismatch: validation женский, скрипт мужской) (Этап 3.13)."""
+    # Женский род в validation ("ты просила"), мужской род в скрипте ("я сорвался")
+    fem_validation = (
+        "Ты вчера просила забрать посылку до восьми вечера, а пункт закрывался через двадцать минут. "
+        "В такой момент естественно чувствовать злость и обиду из-за нарушенных договоренностей. "
+        "Тебе было важно ощущать надежность и взаимную заботу о планах."
+    )
+    masc_scripts = [
+        ActionScriptItem(
+            label="Сообщение прямо сейчас",
+            text="Я вчера сорвался и злюсь на себя. Давай прямо сейчас спокойно решим, как спасти завтрашний день.",
+        ),
+        ActionScriptItem(
+            label="Предложение на сегодня или завтра",
+            text="Предлагаю сегодня вечером уделить 15 минут и спокойно сверить наши планы на завтра.",
+        ),
+    ]
+
+    card = PartnerResponse(
+        validation=fem_validation,
+        partner_perspective=FALLBACK_PARTNER_PERSPECTIVE,
+        blind_spot=FALLBACK_BLIND_SPOT,
+        action_scripts=masc_scripts,
+    )
+    errs = validate_partner_card(card, is_high_risk=False)
+    assert any("RoleGenderMismatch" in e for e in errs), f"Expected RoleGenderMismatch, got: {errs}"
+
+    # Прямой вызов check_gender_consistency
+    direct_errs = check_gender_consistency(fem_validation, masc_scripts)
+    assert any("RoleGenderMismatch" in e for e in direct_errs)
+
+    # Согласованный женский род не должен вызывать ошибку
+    fem_scripts = [
+        ActionScriptItem(
+            label="Сообщение прямо сейчас",
+            text="Я вчера расстроилась и закрылась. Давай прямо сейчас спокойно всё обсудим.",
+        ),
+        ActionScriptItem(
+            label="Предложение на сегодня или завтра",
+            text="Предлагаю сегодня вечером уделить 15 минут и спокойно сверить наши планы на завтра.",
+        ),
+    ]
+    card_ok = PartnerResponse(
+        validation=fem_validation,
+        partner_perspective=FALLBACK_PARTNER_PERSPECTIVE,
+        blind_spot=FALLBACK_BLIND_SPOT,
+        action_scripts=fem_scripts,
+    )
+    errs_ok = validate_partner_card(card_ok, is_high_risk=False)
+    assert not any("RoleGenderMismatch" in e for e in errs_ok), f"Unexpected RoleGenderMismatch: {errs_ok}"
+
+
+def test_user_input_whitelist_in_spelling():
+    """Тест игнорирования авторских слов пользователя в is_unknown_word (Этап 3.13)."""
+    user_text = "Я ждала у ПВЗ, а он писал КАПСОМ про старостат и сломанный макбук"
+    whitelist = extract_user_input_words(user_text)
+
+    # Проверяем, что авторские слова извлечены или в белом списке
+    assert "пвз" in whitelist or "пвз" in SPELL_WHITELIST
+    assert "капс" in whitelist or "капс" in SPELL_WHITELIST
+    assert "старостат" in whitelist or "старостат" in SPELL_WHITELIST
+
+    # Проверяем, что is_unknown_word с user_whitelist возвращает False
+    assert not is_unknown_word("пвз", user_whitelist=whitelist)
+    assert not is_unknown_word("капс", user_whitelist=whitelist)
+    assert not is_unknown_word("капсом", user_whitelist=whitelist)
+    assert not is_unknown_word("старостат", user_whitelist=whitelist)
+    assert not is_unknown_word("старостатом", user_whitelist=whitelist)
+    assert not is_unknown_word("макбук", user_whitelist=whitelist)
+
+    # Настоящая опечатка всё равно распознается как неизвестное слово
+    assert is_unknown_word("абвгдеёжзийклмноп", user_whitelist=whitelist)
+
+
+def test_not_applicable_validator_short_circuit():
+    """Тест короткого замыкания для not_applicable в validators.py (Этап 3.14)."""
+    from schemas import MediatorOutput
+    from validators import validate_full_mediator_output
+
+    # Карточка с пустыми или короткими полями при not_applicable=True не должна вызывать ошибок
+    short_card = PartnerResponse(
+        validation="Коротко.",
+        partner_perspective="",
+        blind_spot="",
+        action_scripts=[],
+    )
+    errs_card = validate_partner_card(short_card, not_applicable=True)
+    assert not errs_card, f"Expected no errors for not_applicable card, got: {errs_card}"
+
+    # Общий итог с пустыми полями при not_applicable=True не должен вызывать ошибок
+    empty_shared = SharedSummary(
+        situation_overview="",
+        shared_advice="",
+        conversation_starter="",
+    )
+    errs_shared = validate_shared_summary(empty_shared, not_applicable=True)
+    assert not errs_shared, f"Expected no errors for not_applicable shared, got: {errs_shared}"
+
+    # Сквозная проверка полного MediatorOutput с флагом not_applicable=True
+    mediator_out = MediatorOutput(
+        risk_level="none",
+        partner_1_response=short_card,
+        partner_2_response=short_card,
+        shared_summary=empty_shared,
+        not_applicable=True,
+    )
+    full_errs = validate_full_mediator_output(mediator_out)
+    assert not full_errs, f"Expected no errors in validate_full_mediator_output for not_applicable=True, got: {full_errs}"
+
+
+def test_stage_3_16_not_applicable_polite_refusal():
+    """Тест корректного системного отказа при not_applicable=True без фиктивных карточек (Этап 3.16)."""
+    from config.fallbacks import NOT_APPLICABLE_REFUSAL_MSG, NOT_APPLICABLE_CARD, NOT_APPLICABLE_SHARED
+    from schemas import MediatorOutput
+    from validators import validate_partner_card, validate_shared_summary, validate_full_mediator_output
+
+    assert "не содержит описания кризисной ситуации" in NOT_APPLICABLE_REFUSAL_MSG
+    assert "не подлежит разбору" in NOT_APPLICABLE_REFUSAL_MSG
+
+    # Проверяем, что в NOT_APPLICABLE_CARD нет фиктивных советов/скриптов
+    assert NOT_APPLICABLE_CARD["action_scripts"] == []
+    assert NOT_APPLICABLE_CARD["partner_perspective"] == ""
+    assert NOT_APPLICABLE_CARD["blind_spot"] == ""
+    assert NOT_APPLICABLE_CARD["validation"] == NOT_APPLICABLE_REFUSAL_MSG
+
+    # Валидатор пропускает системный отказ без проверок на длину и 3 предложения
+    card = PartnerResponse(**NOT_APPLICABLE_CARD)
+    card_errs = validate_partner_card(card, is_high_risk=False, not_applicable=True)
+    assert not card_errs, f"Validation failed for not_applicable refusal card: {card_errs}"
+
+    # Даже без передачи not_applicable=True, но с системным текстом отказа валидатор пропускает
+    card_auto_errs = validate_partner_card(card, is_high_risk=False)
+    assert not card_auto_errs, f"Auto-detected refusal card failed validation: {card_auto_errs}"
+
+    shared = SharedSummary(**NOT_APPLICABLE_SHARED)
+    shared_errs = validate_shared_summary(shared, is_high_risk=False, not_applicable=True)
+    assert not shared_errs, f"Validation failed for not_applicable refusal shared: {shared_errs}"
+
+    out = MediatorOutput(
+        risk_level="none",
+        partner_1_response=card,
+        partner_2_response=card,
+        shared_summary=shared,
+        not_applicable=True,
+    )
+    full_errs = validate_full_mediator_output(out)
+    assert not full_errs, f"Full validation failed for not_applicable output: {full_errs}"
+
+
+def test_stage_3_18_ritual_consistency_with_micro_steps():
+    """Тест смягчения таймингов ритуала и проверки микро-шагов (Этап 3.18)."""
+    from validators import (
+        are_durations_consistent,
+        validate_ritual_consistency,
+        check_ritual_consistency,
+        validate_ritual_action_scripts_consistency,
+        align_action_scripts_with_ritual,
+    )
+    from schemas import AgreedRitual, ActionScriptItem
+
+    # 1. are_durations_consistent: {20} и {2, 3, 20} (Кейс 17) согласованы
+    assert are_durations_consistent({"20 мин"}, {"2 мин", "3 мин", "20 мин"}) is True
+    assert are_durations_consistent({"2 мин", "3 мин", "20 мин"}, {"20 мин"}) is True
+
+    # 2. {15 мин} и {15 мин, 3 мин} согласованы
+    assert are_durations_consistent({"15 мин"}, {"15 мин", "3 мин"}) is True
+
+    # 3. Несовпадающие длительности по-прежнему бракуются
+    assert are_durations_consistent({"10 мин"}, {"15 мин"}) is False
+    assert are_durations_consistent({"10 мин"}, {"45 мин"}) is False
+
+    # 4. validate_ritual_consistency (Кейс 17: P1 20 минут, P2 20 минут + микро-шаги 3 мин и 2 мин)
+    p1_s2 = "Предлагаю завтра утром на 20 минут сесть и выписать критерии."
+    p2_s2 = "Давай сделаем вечерний чекин на 20 минут: по 3 минуты фактов, затем 2 минуты отражения."
+    shared_advice = "Попробуйте говорить друг другу тёплые фразы поддержки."
+    errs = validate_ritual_consistency(p1_s2, p2_s2, shared_advice)
+    assert not errs, f"Expected no errors for case 17 ritual phrasing, got: {errs}"
+
+    # 5. Проверка алиаса check_ritual_consistency
+    alias_errs = check_ritual_consistency(p1_s2, p2_s2, shared_advice)
+    assert not alias_errs
+
+    # 6. validate_ritual_action_scripts_consistency не бракует микро-шаги при наличии target_minutes
+    ritual = AgreedRitual(
+        name="Вечерний чекин",
+        duration_minutes=20,
+        when="вечером",
+        format="разговор",
+        serves_partner_1_need="ясность",
+        serves_partner_2_need="спокойствие",
+    )
+    scripts = [
+        ActionScriptItem(label="Сообщение", text="Привет."),
+        ActionScriptItem(label="Предложение", text="Давай чекин на 20 минут: 3 минуты фактов и 2 минуты пауза."),
+    ]
+    script_errs = validate_ritual_action_scripts_consistency(scripts, ritual)
+    assert not script_errs, f"Expected no errors for micro-steps with target duration, got: {script_errs}"
+
+    # 7. align_action_scripts_with_ritual сохраняет микро-шаги, если целевое время уже в тексте
+    aligned = align_action_scripts_with_ritual(scripts, ritual)
+    assert "3 минуты" in aligned[1].text
+    assert "2 минуты" in aligned[1].text
+    assert "20 минут" in aligned[1].text
+
+
+def test_stage_3_18_exact_not_applicable_refusal_text():
+    """Тест точного совпадения эталонного текста системного отказа (Этап 3.18)."""
+    from config.fallbacks import NOT_APPLICABLE_REFUSAL_MSG, NOT_APPLICABLE_CARD, NOT_APPLICABLE_SHARED
+
+    expected_exact = (
+        "Текст не содержит описания кризисной ситуации в паре и не подлежит разбору. "
+        "Пожалуйста, опишите реальную ситуацию или конфликт между вами."
+    )
+    assert NOT_APPLICABLE_REFUSAL_MSG == expected_exact
+    assert NOT_APPLICABLE_CARD["validation"] == expected_exact
+    assert NOT_APPLICABLE_SHARED["situation_overview"] == expected_exact
+    assert NOT_APPLICABLE_CARD["action_scripts"] == []
+
 
 
 

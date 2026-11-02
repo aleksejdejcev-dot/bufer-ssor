@@ -62,6 +62,7 @@ import gigachat
 import pymorphy3
 import snowballstemmer
 import asyncpg
+import httpx
 print('✅ Все обязательные зависимости успешно импортированы')
 "
 else
@@ -148,6 +149,18 @@ if [ -n "$FORBIDDEN_FOUND" ]; then
     exit 1
 fi
 echo "✅ Запрещённых формулировок не обнаружено"
+
+echo ""
+echo "========================================================================"
+echo "▶ 6. Сборка фронтенда (Frontend build)"
+echo "========================================================================"
+if [ -d "frontend" ]; then
+    echo "📦 Проверка и установка зависимостей фронтенда..."
+    (cd frontend && (npm ci --prefer-offline 2>/dev/null || npm install --quiet))
+    echo "🔨 Сборка Vite..."
+    (cd frontend && npm run build)
+    echo "✅ Frontend: сборка успешно завершена"
+fi
 
 echo ""
 echo "========================================================================"

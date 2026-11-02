@@ -11,6 +11,10 @@ pgdata/
 .env.*
 !backend/certs/russian_trusted_root_ca.pem
 tests/out_*.json
+backend/tests/out_*.json
+out_*.json
+*samples_results.json
+.cache/
 tests/.cache/
 backend/tests/.cache/
 node_modules/

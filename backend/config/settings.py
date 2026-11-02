@@ -63,6 +63,8 @@ class Settings(BaseSettings):
 
     # Окружение (production | development)
     ENVIRONMENT: str = "production"
+    ENABLE_DEV_TOOLS: bool = False
+    RETENTION_INTERVAL_SECONDS: int = 3600
 
     # Криптография (Fernet 32-байтный base64 ключ)
     INPUT_ENCRYPTION_KEY: str = ""
@@ -79,6 +81,9 @@ class Settings(BaseSettings):
 
     # Платежи (Yookassa)
     ENABLE_YOOKASSA: bool = False
+    YOOKASSA_SHOP_ID: str = ""
+    YOOKASSA_SECRET_KEY: str = ""
+    YOOKASSA_RETURN_URL: str = "https://t.me/BufferSsorBot"
 
     # Ограничения на голосовые сообщения
     MAX_VOICE_DURATION_SECONDS: int = 300  # 5 минут
@@ -114,6 +119,8 @@ def validate_production_security(s: Settings) -> None:
     """
     if s.ENVIRONMENT == "production":
         errors = []
+        if s.ENABLE_DEV_TOOLS:
+            errors.append("ENABLE_DEV_TOOLS строго запрещен в режиме production")
         if s.GIGACHAT_INSECURE:
             errors.append("GIGACHAT_INSECURE=1 строго запрещен в режиме production")
         if not s.TELEGRAM_WEBHOOK_SECRET:

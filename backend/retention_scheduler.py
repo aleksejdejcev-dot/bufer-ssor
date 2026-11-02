@@ -61,6 +61,16 @@ def clean_expired_payments(repo: Repository, retention_years: Optional[int]) -> 
     return count
 
 
+def clean_waiting_sessions(repo: Repository) -> int:
+    """Переводит просроченные сессии (waiting_partner_2 > 48ч) в статус expired."""
+    expired = repo.get_expired_sessions()
+    for s in expired:
+        repo.expire_session(s["id"])
+    if expired:
+        logger.info("Retention: переведено %d просроченных сессий в статус expired", len(expired))
+    return len(expired)
+
+
 def run_retention_cycle(
     repo: Repository,
     results_retention_days: int = 30,
@@ -83,6 +93,7 @@ def run_retention_cycle(
         purged_rate_limits = clean_rate_limits(repo, max_age_seconds=rate_limit_max_age_seconds)
         purged_invites = clean_expired_invites(repo, ttl_hours=invite_ttl_hours)
         purged_payments = clean_expired_payments(repo, retention_years=payment_retention_years)
+        purged_waiting = clean_waiting_sessions(repo)
 
         return {
             "status": "completed",
@@ -91,6 +102,7 @@ def run_retention_cycle(
             "purged_rate_limits": purged_rate_limits,
             "purged_invites": purged_invites,
             "purged_payments": purged_payments,
+            "purged_waiting": purged_waiting,
         }
     finally:
         repo.release_advisory_lock(RETENTION_ADVISORY_LOCK_ID)

@@ -17,11 +17,15 @@ pgdata/
 *.log
 
 # Tests and caches
+.cache/
 backend/tests/.cache/
 tests/.cache/
+out_*.json
 tests/out_*.json
 backend/tests/out_*.json
+*samples_results.json
 backend/tests/samples_results.json
+backend/tests/stress_samples_results.json
 
 # Certificates (ignore local user certs, keep trusted root ca bundle)
 *.pem

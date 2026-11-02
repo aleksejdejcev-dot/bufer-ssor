@@ -139,6 +139,13 @@ export const api = {
   },
 
   /**
+   * Удаление только истории сессий и разборов пары (связка и профили остаются)
+   */
+  async deleteHistory() {
+    return request('/history', { method: 'DELETE' });
+  },
+
+  /**
    * Начать новую сессию разбора конфликта
    */
   async startConflict() {
@@ -176,6 +183,16 @@ export const api = {
     return request('/signal/hint', {
       method: 'POST',
       body: JSON.stringify({ hint_type: hintType }),
+    });
+  },
+
+  /**
+   * Создать платежную сессию в ЮKassa для оформления подписки
+   */
+  async createPayment(plan = 'month_sub') {
+    return request('/payment/create', {
+      method: 'POST',
+      body: JSON.stringify({ plan }),
     });
   },
 };

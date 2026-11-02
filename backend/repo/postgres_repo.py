@@ -8,6 +8,7 @@ import threading
 import json
 import uuid
 import re
+import hashlib
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, Optional, List, Tuple
 import asyncpg
@@ -32,6 +33,8 @@ def _format_row(row: Optional[asyncpg.Record]) -> Optional[Dict[str, Any]]:
             d[k] = str(v)
         elif isinstance(v, datetime):
             d[k] = v.isoformat()
+        elif hasattr(v, "as_tuple"):  # Decimal
+            d[k] = float(v)
         elif isinstance(v, bytes):
             d[k] = bytes(v)
         elif isinstance(v, str) and (k.startswith("ai_advice") or k == "shared_summary"):
@@ -85,6 +88,13 @@ class PostgresRepo:
             if not self.database_url:
                 raise RuntimeError("DATABASE_URL is not configured for PostgresRepo")
 
+            dbname = (self.database_url or "").split("/")[-1].split("?")[0]
+            is_test_db = dbname.endswith("_test")
+
+            if settings.ENVIRONMENT == "production" and not is_test_db:
+                if self.ssl_mode == "disable" or self.ssl_mode not in ("require", "verify-ca", "verify-full"):
+                    raise RuntimeError("Production database connection must use TLS (DB_SSLMODE must be require, verify-ca or verify-full)")
+
             ssl_param = None
             if self.ssl_mode in ("require", "verify-ca", "verify-full"):
                 import ssl
@@ -99,6 +109,20 @@ class PostgresRepo:
                 max_size=self.max_pool_size,
                 ssl=ssl_param,
             )
+
+            # Проверка безопасности подключения в режиме production (Пункт 4 аудита)
+            if settings.ENVIRONMENT == "production" and not is_test_db:
+                try:
+                    async with self._pool.acquire() as conn:
+                        rolsuper = await conn.fetchval(
+                            "SELECT rolsuper FROM pg_roles WHERE rolname = current_user;"
+                        )
+                        if rolsuper is True:
+                            raise RuntimeError("Production database connection must not use a superuser role")
+                except Exception:
+                    await self._pool.close()
+                    self._pool = None
+                    raise
         return self._pool
 
     def close(self):
@@ -223,9 +247,11 @@ class PostgresRepo:
                     row = await conn.fetchrow("""
                         UPDATE couples
                         SET partner_2_id = $2
-                        WHERE id = $1
+                        WHERE id = $1 AND partner_2_id IS NULL
                         RETURNING *;
                     """, c_uuid, partner_2_id)
+                    if not row:
+                        raise ValueError("Пара уже заполнена или не существует")
                     await conn.execute("UPDATE users SET couple_id = $1 WHERE telegram_id = $2;", c_uuid, partner_2_id)
                     return _format_row(row)
         return self._run_async(_impl())
@@ -520,12 +546,22 @@ class PostgresRepo:
                 return int(val or 0)
         return self._run_async(_impl())
 
-    def delete_history(self, couple_id: str) -> None:
+    def _hash_id(self, val: Any) -> str:
+        salt = getattr(settings, "PAYMENT_HASH_KEY", "buffer_salt")
+        return hashlib.sha256(f"{val}:{salt}".encode("utf-8")).hexdigest()
+
+    def delete_history(self, couple_id: str, initiated_by: Optional[int] = None) -> None:
         async def _impl():
             pool = await self._get_pool()
             c_uuid = uuid.UUID(couple_id)
+            c_hash = self._hash_id(couple_id)
+            u_hash = self._hash_id(initiated_by) if initiated_by else "unknown"
             async with pool.acquire() as conn:
                 async with conn.transaction():
+                    await conn.execute("""
+                        INSERT INTO deletions_log (couple_id_hash, initiated_by_hash, entity_type)
+                        VALUES ($1, $2, 'history');
+                    """, c_hash, u_hash)
                     await conn.execute("""
                         DELETE FROM pending_inputs
                         WHERE session_id IN (SELECT id FROM conflict_sessions WHERE couple_id = $1);
@@ -545,14 +581,28 @@ class PostgresRepo:
                 return {"purged_sessions": 0, "purged_inputs": 0}
         return self._run_async(_impl())
 
-    def delete_couple_data(self, couple_id: str) -> None:
+    def delete_couple_data(self, couple_id: str, initiated_by: Optional[int] = None) -> None:
         async def _impl():
             pool = await self._get_pool()
             c_uuid = uuid.UUID(couple_id)
+            c_hash = self._hash_id(couple_id)
+            u_hash = self._hash_id(initiated_by) if initiated_by else "unknown"
             async with pool.acquire() as conn:
                 async with conn.transaction():
+                    await conn.execute("""
+                        INSERT INTO deletions_log (couple_id_hash, initiated_by_hash, entity_type)
+                        VALUES ($1, $2, 'couple');
+                    """, c_hash, u_hash)
                     await conn.execute("SELECT delete_couple_data($1);", c_uuid)
         self._run_async(_impl())
+
+    def get_deletions_log(self) -> List[Dict[str, Any]]:
+        async def _impl():
+            pool = await self._get_pool()
+            async with pool.acquire() as conn:
+                rows = await conn.fetch("SELECT * FROM deletions_log ORDER BY deleted_at DESC;")
+                return _format_rows(rows)
+        return self._run_async(_impl())
 
     def save_payment(
         self,
@@ -573,6 +623,90 @@ class PostgresRepo:
                     RETURNING *;
                 """, product, amount, currency, provider_charge_id, payer_hash, c_uuid)
                 return _format_row(row)
+        return self._run_async(_impl())
+
+    def create_payment(
+        self,
+        couple_id: Any,
+        user_id: Any,
+        payment_id: str,
+        amount: Any,
+        currency: str = "RUB",
+        product: str = "month_sub",
+    ) -> Dict[str, Any]:
+        async def _impl():
+            pool = await self._get_pool()
+            c_uuid = uuid.UUID(str(couple_id)) if couple_id else None
+            payer_hash = self._hash_id(user_id)
+            numeric_amount = float(amount) if hasattr(amount, "__float__") else amount
+            async with pool.acquire() as conn:
+                row = await conn.fetchrow("""
+                    INSERT INTO payments (product, amount, currency, provider_charge_id, payer_hash, couple_id, status)
+                    VALUES ($1, $2, $3, $4, $5, $6, 'pending')
+                    ON CONFLICT (provider_charge_id) DO UPDATE
+                    SET amount = EXCLUDED.amount,
+                        status = EXCLUDED.status
+                    RETURNING *;
+                """, product, numeric_amount, currency, payment_id, payer_hash, c_uuid)
+                return _format_row(row)
+        return self._run_async(_impl())
+
+    def get_payment(self, payment_id: str) -> Optional[Dict[str, Any]]:
+        async def _impl():
+            pool = await self._get_pool()
+            async with pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    "SELECT * FROM payments WHERE provider_charge_id = $1;",
+                    payment_id,
+                )
+                return _format_row(row)
+        return self._run_async(_impl())
+
+    def activate_subscription_for_couple(
+        self,
+        couple_id: Any,
+        payment_id: str,
+        days: int = 30,
+    ) -> Optional[Dict[str, Any]]:
+        async def _impl():
+            pool = await self._get_pool()
+            c_uuid = uuid.UUID(str(couple_id)) if couple_id else None
+            async with pool.acquire() as conn:
+                async with conn.transaction():
+                    pay_row = await conn.fetchrow("""
+                        SELECT id, status, couple_id
+                        FROM payments
+                        WHERE provider_charge_id = $1
+                        FOR UPDATE;
+                    """, payment_id)
+
+                    if not pay_row:
+                        return None
+
+                    if pay_row["status"] == "succeeded":
+                        return None
+
+                    target_couple_uuid = c_uuid or pay_row["couple_id"]
+                    if not target_couple_uuid:
+                        return None
+
+                    await conn.execute("""
+                        UPDATE payments
+                        SET status = 'succeeded', paid_at = now()
+                        WHERE provider_charge_id = $1;
+                    """, payment_id)
+
+                    couple_row = await conn.fetchrow("""
+                        UPDATE couples
+                        SET subscription_until = GREATEST(COALESCE(subscription_until, now()), now()) + ($2 * interval '1 day')
+                        WHERE id = $1
+                        RETURNING id, subscription_until, partner_1_id, partner_2_id;
+                    """, target_couple_uuid, days)
+
+                    if not couple_row:
+                        return None
+
+                    return _format_row(couple_row)
         return self._run_async(_impl())
 
     def get_payments_by_payer_hash(self, payer_hash: str) -> List[Dict[str, Any]]:
@@ -609,14 +743,58 @@ class PostgresRepo:
         return self.rate_limiter.check(key, max_requests, window_seconds)
 
     def record_failed_invite_attempt(self, telegram_id: int) -> None:
-        self.rate_limiter.record_hit(f"invite_fail:{telegram_id}")
+        async def _impl():
+            pool = await self._get_pool()
+            key = f"invite_fail:{telegram_id}"
+            async with pool.acquire() as conn:
+                await conn.execute("""
+                    INSERT INTO rate_limits (key, requests, window_start)
+                    VALUES ($1, 1, now())
+                    ON CONFLICT (key) DO UPDATE
+                    SET requests = CASE
+                        WHEN rate_limits.window_start <= now() - interval '3600 seconds' THEN 1
+                        ELSE rate_limits.requests + 1
+                    END,
+                    window_start = CASE
+                        WHEN rate_limits.window_start <= now() - interval '3600 seconds' THEN now()
+                        ELSE rate_limits.window_start
+                    END;
+                """, key)
+        self._run_async(_impl())
 
     def check_invite_bruteforce(self, telegram_id: int) -> Tuple[bool, int]:
-        allowed, retry_after = self.rate_limiter.peek(f"invite_fail:{telegram_id}", max_requests=5, window_seconds=3600)
-        return (not allowed), retry_after
+        async def _impl() -> Tuple[bool, int]:
+            pool = await self._get_pool()
+            key = f"invite_fail:{telegram_id}"
+            async with pool.acquire() as conn:
+                row = await conn.fetchrow("""
+                    SELECT requests, window_start
+                    FROM rate_limits
+                    WHERE key = $1;
+                """, key)
+                if not row:
+                    return False, 0
+                reqs = row["requests"]
+                w_start = row["window_start"]
+                now = datetime.now(timezone.utc)
+                if w_start.tzinfo is None:
+                    w_start = w_start.replace(tzinfo=timezone.utc)
+                elapsed = (now - w_start).total_seconds()
+                if elapsed >= 3600:
+                    return False, 0
+                if reqs >= 5:
+                    retry_after = max(1, int(3600 - elapsed) + 1)
+                    return True, retry_after
+                return False, 0
+        return self._run_async(_impl())
 
     def reset_invite_bruteforce(self, telegram_id: int) -> None:
-        self.rate_limiter.reset(f"invite_fail:{telegram_id}")
+        async def _impl():
+            pool = await self._get_pool()
+            key = f"invite_fail:{telegram_id}"
+            async with pool.acquire() as conn:
+                await conn.execute("DELETE FROM rate_limits WHERE key = $1;", key)
+        self._run_async(_impl())
 
     def cleanup_rate_limits(self, max_age_seconds: int = 3600) -> int:
         async def _impl():

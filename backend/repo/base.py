@@ -114,7 +114,7 @@ class Repository(Protocol):
     def cleanup_expired_pending_inputs(self) -> int:
         ...
 
-    def delete_history(self, couple_id: str) -> None:
+    def delete_history(self, couple_id: str, initiated_by: Optional[int] = None) -> None:
         """Удаляет только сессии и историю ссоры пары, профили и подписка остаются."""
         ...
 
@@ -125,7 +125,7 @@ class Repository(Protocol):
         """
         ...
 
-    def delete_couple_data(self, couple_id: str) -> None:
+    def delete_couple_data(self, couple_id: str, initiated_by: Optional[int] = None) -> None:
         """Полное удаление пары, истории и обоих профилей в users."""
         ...
 
@@ -138,6 +138,35 @@ class Repository(Protocol):
         payer_hash: str,
         couple_id: Optional[str] = None,
     ) -> Dict[str, Any]:
+        ...
+
+    def create_payment(
+        self,
+        couple_id: Any,
+        user_id: Any,
+        payment_id: str,
+        amount: Any,
+        currency: str = "RUB",
+        product: str = "month_sub",
+    ) -> Dict[str, Any]:
+        """Создает запись о платеже со статусом pending."""
+        ...
+
+    def get_payment(self, payment_id: str) -> Optional[Dict[str, Any]]:
+        """Возвращает данные платежа по ID платежного провайдера (provider_charge_id)."""
+        ...
+
+    def activate_subscription_for_couple(
+        self,
+        couple_id: Any,
+        payment_id: str,
+        days: int = 30,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Идемпотентно активирует подписку для пары при успешной оплате.
+        Если платеж уже обработан (status == 'succeeded'), возвращает None.
+        Обновляет payment.status = 'succeeded' и couples.subscription_until в единой транзакции.
+        """
         ...
 
     def get_payments_by_payer_hash(self, payer_hash: str) -> List[Dict[str, Any]]:
@@ -178,4 +207,7 @@ class Repository(Protocol):
         ...
 
     def reset_invite_bruteforce(self, telegram_id: int) -> None:
+        ...
+
+    def get_deletions_log(self) -> List[Dict[str, Any]]:
         ...
