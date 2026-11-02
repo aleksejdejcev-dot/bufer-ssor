@@ -67,6 +67,13 @@ def _resolve_proxy_for_env(proxy_url: Optional[str]) -> Optional[str]:
             return resolved
         except Exception:
             pass
+    # Вне Docker (на хосте разработчика) имя сервиса torproxy мапится на 127.0.0.1:9050
+    if not os.path.exists("/.dockerenv") and "torproxy" in proxy_url:
+        try:
+            import socket
+            socket.gethostbyname("torproxy")
+        except socket.gaierror:
+            return proxy_url.replace("torproxy", "127.0.0.1")
     return proxy_url
 
 

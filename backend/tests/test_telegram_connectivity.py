@@ -27,6 +27,34 @@ async def test_telegram_proxy_docker_resolution(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_telegram_proxy_torproxy_host_resolution(monkeypatch):
+    import socket
+    monkeypatch.setattr("os.path.exists", lambda path: False)
+    def fake_gethostbyname(hostname):
+        if hostname == "torproxy":
+            raise socket.gaierror("Name or service not known")
+        return "127.0.0.1"
+    monkeypatch.setattr("socket.gethostbyname", fake_gethostbyname)
+
+    res = _resolve_proxy_for_env("socks5://torproxy:9050")
+    assert res == "socks5://127.0.0.1:9050"
+
+
+def test_bot_initialization_with_socks5_proxy(monkeypatch):
+    from aiogram import Bot
+    from aiogram.client.session.aiohttp import AiohttpSession
+
+    monkeypatch.setattr(settings, "TELEGRAM_PROXY", "socks5://torproxy:9050")
+    proxy = _get_telegram_proxy()
+    assert proxy == "socks5://torproxy:9050"
+
+    session = AiohttpSession(proxy=proxy, timeout=15.0)
+    test_bot = Bot(token="123456789:dummy_token_test", session=session)
+    assert test_bot.session is session
+    assert test_bot.token == "123456789:dummy_token_test"
+
+
+@pytest.mark.asyncio
 async def test_telegram_startup_worker_success(monkeypatch):
     mock_bot = MagicMock()
     mock_me = MagicMock()

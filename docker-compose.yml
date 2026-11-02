@@ -15,6 +15,14 @@ services:
       - ./pgdata:/var/lib/postgresql/data
       - ./scripts/init_postgres.sh:/docker-entrypoint-initdb.d/init_postgres.sh:ro
 
+  torproxy:
+    image: peterdavehello/tor-socks-proxy:latest
+    container_name: buffer_ssor_torproxy
+    restart: unless-stopped
+    command: ["/usr/bin/tor", "-f", "/etc/tor/torrc", "--SocksPort", "0.0.0.0:9050"]
+    ports:
+      - "127.0.0.1:9050:9050"
+
   backend:
     build:
       context: .
@@ -27,7 +35,9 @@ services:
       - .env
     environment:
       - DATABASE_URL=postgresql://${POSTGRES_USER:-buffer_admin}:${POSTGRES_PASSWORD:-buffer_dev_pass}@postgres:5432/${POSTGRES_DB:-buffer_ssor}
+      - TELEGRAM_PROXY=${TELEGRAM_PROXY:-socks5://torproxy:9050}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
       - postgres
+      - torproxy
