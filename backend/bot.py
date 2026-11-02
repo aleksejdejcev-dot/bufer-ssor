@@ -63,7 +63,13 @@ dp.include_router(router)
 
 def get_miniapp_keyboard(is_admin_user: bool = False) -> InlineKeyboardMarkup:
     """Кнопка для открытия Telegram Mini App и админ-панели"""
-    url = settings.MINIAPP_URL or "http://localhost:8000"
+    url = (
+        os.getenv("MINI_APP_URL")
+        or getattr(settings, "MINI_APP_URL", None)
+        or os.getenv("MINIAPP_URL")
+        or getattr(settings, "MINIAPP_URL", None)
+        or "https://bufer-ssor.ru"
+    )
     buttons = []
     if url.startswith("https://t.me/"):
         buttons.append([InlineKeyboardButton(text="Открыть Буфер Ссор 💬", url=url)])

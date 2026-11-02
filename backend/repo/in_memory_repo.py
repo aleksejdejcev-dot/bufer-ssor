@@ -507,8 +507,8 @@ class InMemoryRepo:
         return list(self.couples.values())
 
     def get_admin_stats(self) -> Dict[str, Any]:
-        paired = sum(1 for c in self.couples.values() if c.get("user2_id"))
-        waiting = sum(1 for c in self.couples.values() if not c.get("user2_id"))
+        paired = sum(1 for c in self.couples.values() if c.get("partner_2_id"))
+        waiting = sum(1 for c in self.couples.values() if not c.get("partner_2_id"))
         completed = sum(1 for s in self.conflict_sessions.values() if s.get("status") == "completed")
         active = sum(1 for s in self.conflict_sessions.values() if s.get("status") not in ("completed", "cancelled"))
         high_risk = sum(1 for s in self.conflict_sessions.values() if s.get("risk_level") in ("high", "critical"))

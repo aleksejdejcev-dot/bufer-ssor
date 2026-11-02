@@ -731,8 +731,8 @@ class PostgresRepo:
             async with pool.acquire() as conn:
                 total_users = await conn.fetchval("SELECT count(*) FROM users;")
                 total_couples = await conn.fetchval("SELECT count(*) FROM couples;")
-                paired_couples = await conn.fetchval("SELECT count(*) FROM couples WHERE user2_id IS NOT NULL;")
-                waiting_couples = await conn.fetchval("SELECT count(*) FROM couples WHERE user2_id IS NULL;")
+                paired_couples = await conn.fetchval("SELECT count(*) FROM couples WHERE partner_2_id IS NOT NULL;")
+                waiting_couples = await conn.fetchval("SELECT count(*) FROM couples WHERE partner_2_id IS NULL;")
                 total_sessions = await conn.fetchval("SELECT count(*) FROM conflict_sessions;")
                 completed_sessions = await conn.fetchval("SELECT count(*) FROM conflict_sessions WHERE status = 'completed';")
                 active_sessions = await conn.fetchval("SELECT count(*) FROM conflict_sessions WHERE status NOT IN ('completed', 'cancelled');")

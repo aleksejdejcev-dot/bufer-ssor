@@ -74,7 +74,8 @@ class Settings(BaseSettings):
     PAYMENT_HASH_KEY: str = ""
 
     # Telegram Mini App
-    MINIAPP_URL: str = "https://t.me/BufferSsorBot/app"
+    MINI_APP_URL: str = "https://bufer-ssor.ru"
+    MINIAPP_URL: str = "https://bufer-ssor.ru"
 
     # Панель администратора в Telegram-боте
     ADMIN_TELEGRAM_IDS: str = ""

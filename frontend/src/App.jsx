@@ -49,7 +49,7 @@ export default function App() {
       const data = await api.getMe();
       setMeData(data);
 
-      const hasAcceptedLegal = Boolean(data.user?.accepted_legal_at);
+      const hasAcceptedLegal = Boolean(data.user?.accepted_legal_at) || localStorage.getItem('accepted_legal') === 'true';
 
       if (!hasAcceptedLegal) {
         setCurrentScreen('onboarding');
@@ -110,14 +110,34 @@ export default function App() {
     );
   }
 
+  const handleLegalAccepted = async (legalRes) => {
+    try {
+      localStorage.setItem('accepted_legal', 'true');
+    } catch (e) {
+      console.warn('localStorage error:', e);
+    }
+    // Мгновенно обновляем стейт и переключаем экран на главную страницу
+    setMeData((prev) => ({
+      ...prev,
+      user: {
+        ...(prev?.user || {}),
+        accepted_legal_at: legalRes?.accepted_legal_at || new Date().toISOString(),
+      },
+    }));
+    setCurrentScreen('home');
+    try {
+      await loadProfile();
+    } catch (err) {
+      console.warn('Silent refresh after legal accept failed:', err);
+    }
+  };
+
   // ЭКРАН 1: Онбординг и согласие
   if (currentScreen === 'onboarding') {
     return (
       <Onboarding
         initialCouple={meData?.couple}
-        onAccepted={() => {
-          loadProfile();
-        }}
+        onAccepted={handleLegalAccepted}
       />
     );
   }

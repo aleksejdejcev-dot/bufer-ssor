@@ -216,7 +216,12 @@ app = FastAPI(
     openapi_url="/openapi.json" if settings.ENVIRONMENT == "development" else None,
 )
 
-cors_origins = [settings.MINIAPP_URL.rstrip("/")]
+cors_origins = []
+for u in (getattr(settings, "MINI_APP_URL", None), getattr(settings, "MINIAPP_URL", None)):
+    if u and u.startswith("http"):
+        cors_origins.append(u.rstrip("/"))
+if not cors_origins:
+    cors_origins.append("https://bufer-ssor.ru")
 if settings.WEBHOOK_BASE_URL:
     cors_origins.append(settings.WEBHOOK_BASE_URL.rstrip("/"))
 if settings.ENVIRONMENT == "development":
