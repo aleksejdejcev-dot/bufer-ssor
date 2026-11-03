@@ -38,6 +38,7 @@ from retention_scheduler import retention_worker_loop
 from bot import (
     bot,
     dp,
+    setup_bot_commands,
     notify_initiator_prompt,
     send_white_flag,
     send_hint_message,
@@ -119,6 +120,10 @@ async def _telegram_startup_worker():
             bot_info = await asyncio.wait_for(bot.get_me(), timeout=10.0)
             bot_username_cache = bot_info.username
             logger.info("Telegram bot initialized successfully: @%s", bot_username_cache)
+            try:
+                await setup_bot_commands(bot)
+            except Exception as cmd_err:
+                logger.warning("Failed to setup bot commands on init: %s", cmd_err)
             break
         except asyncio.CancelledError:
             logger.info("Telegram startup worker cancelled during get_me")

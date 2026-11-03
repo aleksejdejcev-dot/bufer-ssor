@@ -26,6 +26,7 @@ from aiogram.types import (
     InlineKeyboardMarkup,
     InlineKeyboardButton,
     WebAppInfo,
+    BotCommand,
 )
 from aiogram.enums import ParseMode
 
@@ -269,6 +270,40 @@ async def handle_start(message: Message, command: CommandObject):
     )
     is_admin_user = is_admin(telegram_id)
     await message.answer(welcome_text, parse_mode=ParseMode.HTML, reply_markup=get_miniapp_keyboard(is_admin_user=is_admin_user))
+
+
+# ==============================================================================
+# Обработчик /support и меню команд
+# ==============================================================================
+
+@router.message(Command("support"))
+async def handle_support_command(message: Message):
+    """Связь со службой поддержки и автором проекта"""
+    support_keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="💬 Написать автору", url="https://t.me/Griiikkk"),
+            ]
+        ]
+    )
+    support_text = (
+        "Возникли вопросы по подписке, возврату или работе сервиса?\n"
+        "Напишите автору напрямую — поможем разобраться:"
+    )
+    await message.answer(support_text, reply_markup=support_keyboard)
+
+
+async def setup_bot_commands(bot_instance: Bot) -> None:
+    """Регистрация команд в меню подсказок Telegram-бота"""
+    commands = [
+        BotCommand(command="start", description="Запустить медиатора"),
+        BotCommand(command="support", description="Связь с поддержкой"),
+    ]
+    try:
+        await bot_instance.set_my_commands(commands)
+        logger.info("Bot commands menu registered successfully: /start, /support")
+    except Exception as e:
+        logger.warning("Failed to register bot commands: %s", e)
 
 
 # ==============================================================================

@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 TEST_FERNET_KEY = base64.urlsafe_b64encode(os.urandom(32)).decode()
 os.environ["INPUT_ENCRYPTION_KEY"] = TEST_FERNET_KEY
-os.environ["DATABASE_URL"] = "postgresql://buffer_admin:test_password@127.0.0.1:5432/buffer_ssor_test"
+os.environ["DATABASE_URL"] = os.getenv("DATABASE_URL_TEST") or os.getenv("DATABASE_URL") or "postgresql://buffer_admin:buffer_dev_pass@127.0.0.1:5432/buffer_ssor_test"
 os.environ["TELEGRAM_BOT_TOKEN"] = "123456:DUMMY_TOKEN"
 os.environ["TELEGRAM_WEBHOOK_SECRET"] = "dummy_secret"
 os.environ["WEBHOOK_BASE_URL"] = "https://test.ngrok.app"
@@ -21,7 +21,14 @@ from aiogram.types import User, Chat, Message, Voice
 from aiogram.filters import CommandObject
 
 import db
-from bot import handle_start, handle_conflict_input, send_white_flag, send_hint_message
+from bot import (
+    handle_start,
+    handle_conflict_input,
+    send_white_flag,
+    send_hint_message,
+    handle_support_command,
+    setup_bot_commands,
+)
 
 
 @pytest.fixture
@@ -119,3 +126,39 @@ async def test_bot_voice_input_exceeds_duration(mock_message, monkeypatch):
     assert msg.answer.called
     answer_text = msg.answer.call_args[0][0]
     assert "слишком длинное" in answer_text
+
+
+@pytest.mark.asyncio
+async def test_bot_support_command(mock_message):
+    """Тест команды /support со ссылкой на автора"""
+    msg = mock_message(text="/support", user_id=101)
+    await handle_support_command(msg)
+
+    assert msg.answer.called
+    args, kwargs = msg.answer.call_args
+    assert "Возникли вопросы по подписке, возврату или работе сервиса?" in args[0]
+    assert "Напишите автору напрямую — поможем разобраться:" in args[0]
+    assert "reply_markup" in kwargs
+    kb = kwargs["reply_markup"]
+    assert any(
+        btn.url == "https://t.me/Griiikkk" and "Написать автору" in btn.text
+        for row in kb.inline_keyboard
+        for btn in row
+    )
+
+
+@pytest.mark.asyncio
+async def test_setup_bot_commands():
+    """Тест регистрации команд в меню бота"""
+    mock_bot = MagicMock()
+    mock_bot.set_my_commands = AsyncMock()
+
+    await setup_bot_commands(mock_bot)
+
+    assert mock_bot.set_my_commands.called
+    cmds = mock_bot.set_my_commands.call_args[0][0]
+    commands_map = {cmd.command: cmd.description for cmd in cmds}
+    assert "support" in commands_map
+    assert commands_map["support"] == "Связь с поддержкой"
+    assert "start" in commands_map
+

@@ -16,7 +16,8 @@ import {
   Trash2,
   Lock,
   ArrowRight,
-  History
+  History,
+  MessageCircle
 } from 'lucide-react';
 import WebApp from '@twa-dev/sdk';
 import { api } from '../api/client';
@@ -200,6 +201,22 @@ export default function Home({ meData, onStartSession, onOpenActiveSession, onRe
     } catch (err) {
       setGlobalError(err.message || 'Ошибка очистки истории');
       setIsDeletingHistory(false);
+    }
+  };
+
+  // Связь с поддержкой
+  const handleContactSupport = () => {
+    try {
+      WebApp.HapticFeedback?.impactOccurred('light');
+    } catch {}
+
+    const supportUrl = 'https://t.me/Griiikkk';
+    if (window.Telegram?.WebApp?.openTelegramLink) {
+      window.Telegram.WebApp.openTelegramLink(supportUrl);
+    } else if (WebApp?.openTelegramLink) {
+      WebApp.openTelegramLink(supportUrl);
+    } else {
+      window.open(supportUrl, '_blank');
     }
   };
 
@@ -481,8 +498,20 @@ export default function Home({ meData, onStartSession, onOpenActiveSession, onRe
         </div>
       </div>
 
-      {/* Подвал: Ссылки на документы и Удаление данных пары */}
+      {/* Подвал: Поддержка, ссылки на документы и удаление данных пары */}
       <div className="pt-6 pb-2 text-center space-y-3">
+        {/* Кнопка «Написать в поддержку» */}
+        <div className="flex justify-center">
+          <button
+            type="button"
+            onClick={handleContactSupport}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-medium border border-slate-200 dark:border-white/10 bg-slate-100 dark:bg-white/5 hover:bg-slate-200 dark:hover:bg-white/10 text-slate-700 dark:text-white/80 transition-all cursor-pointer shadow-2xs active:scale-[0.98]"
+          >
+            <MessageCircle size={14} className="text-indigo-500 dark:text-indigo-400 shrink-0" />
+            <span>Написать в поддержку</span>
+          </button>
+        </div>
+
         <div className="flex items-center justify-center gap-3 text-[11px] text-slate-400">
           <button
             onClick={() => setActiveLegalDoc('terms')}
