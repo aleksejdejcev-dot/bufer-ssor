@@ -5,6 +5,7 @@ import Onboarding from './screens/Onboarding';
 import Home from './screens/Home';
 import Session from './screens/Session';
 import PaywallStub from './components/PaywallStub';
+import LandingPage from './screens/LandingPage';
 import { Sparkles, AlertCircle, RefreshCw } from 'lucide-react';
 
 export default function App() {
@@ -65,9 +66,21 @@ export default function App() {
     }
   }, []);
 
+  const isInsideTelegram = Boolean(
+    typeof window !== 'undefined' &&
+    ((window.Telegram?.WebApp?.initData && window.Telegram.WebApp.initData.length > 0) ||
+     window.__DEV_INIT_DATA__)
+  );
+
   useEffect(() => {
+    if (!isInsideTelegram) return;
     loadProfile();
-  }, [loadProfile]);
+  }, [loadProfile, isInsideTelegram]);
+
+  // Если приложение открыто в обычном браузере вне Telegram — отображаем публичный лендинг
+  if (!isInsideTelegram) {
+    return <LandingPage />;
+  }
 
   // Экран загрузки
   if (currentScreen === 'loading') {

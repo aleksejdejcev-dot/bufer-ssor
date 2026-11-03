@@ -1,10 +1,18 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App.jsx';
+import LandingPage from './screens/LandingPage.jsx';
 import './index.css';
+
+// Проверка наличия Telegram WebApp initData для определения окружения
+const isInsideTelegram = Boolean(
+  typeof window !== 'undefined' &&
+  ((window.Telegram?.WebApp?.initData && window.Telegram.WebApp.initData.length > 0) ||
+   window.__DEV_INIT_DATA__)
+);
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
-    <App />
+    {isInsideTelegram ? <App /> : <LandingPage />}
   </React.StrictMode>,
 );
