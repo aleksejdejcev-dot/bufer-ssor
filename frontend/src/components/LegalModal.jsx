@@ -77,9 +77,14 @@ export default function LegalModal({ docKey, onClose }) {
             <div className="w-8 h-8 rounded-lg bg-indigo-50 dark:bg-indigo-950/50 flex items-center justify-center text-indigo-600 dark:text-indigo-400">
               <Icon size={18} />
             </div>
-            <h3 className="font-semibold text-slate-900 dark:text-slate-100 text-sm leading-tight">
-              {doc.title}
-            </h3>
+            <div>
+              <h3 className="font-semibold text-slate-900 dark:text-slate-100 text-sm leading-tight">
+                {doc.title}
+              </h3>
+              <p className="text-[11px] text-slate-400 dark:text-zinc-500 font-normal mt-0.5">
+                Редакция от 2026 года
+              </p>
+            </div>
           </div>
           <button
             onClick={onClose}
@@ -88,12 +93,6 @@ export default function LegalModal({ docKey, onClose }) {
           >
             <X size={20} />
           </button>
-        </div>
-
-        {/* Предупреждающий баннер */}
-        <div className="mx-5 mt-4 p-3 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/50 rounded-xl text-amber-800 dark:text-amber-200 text-xs font-medium flex items-center gap-2">
-          <span>⚠️</span>
-          <span>Черновик, требует проверки юристом. Не является публичной офертой.</span>
         </div>
 
         {/* Текст документа */}

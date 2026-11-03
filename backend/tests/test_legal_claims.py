@@ -51,12 +51,14 @@ def test_no_forbidden_legal_claims_in_codebase():
     assert not violations, "Обнаружены недопустимые юридические утверждения:\n" + "\n".join(violations)
 
 
-def test_legal_modal_contains_draft_banner():
-    """Проверяет наличие предупреждающего баннера в LegalModal.jsx."""
+def test_legal_modal_contains_revision_date():
+    """Проверяет наличие даты редакции и отсутствие плашек черновика в LegalModal.jsx."""
     modal_file = ROOT_DIR / "frontend" / "src" / "components" / "LegalModal.jsx"
     assert modal_file.exists(), "LegalModal.jsx не найден"
     content = modal_file.read_text(encoding="utf-8")
-    assert "Черновик, требует проверки юристом. Не является публичной офертой" in content
+    assert "Редакция от 2026 года" in content
+    assert "Черновик" not in content
+    assert "требует проверки юристом" not in content
 
 
 def test_readme_contains_factual_statements():
