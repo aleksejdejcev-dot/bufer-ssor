@@ -500,6 +500,76 @@ class InMemoryRepo:
             "partner_2_id": couple.get("partner_2_id"),
         }
 
+    def revoke_subscription_for_couple(
+        self,
+        payment_id: str,
+        refund_id: Optional[str] = None,
+        days: int = 30,
+    ) -> Optional[Dict[str, Any]]:
+        target_pay = None
+        for p in self.payments.values():
+            if p.get("provider_charge_id") == payment_id:
+                target_pay = p
+                break
+
+        if not target_pay:
+            return None
+
+        c_id = str(target_pay.get("couple_id") or "")
+        couple = self.couples.get(c_id)
+
+        if target_pay.get("status") == "refunded":
+            return {
+                "already_refunded": True,
+                "payment_id": payment_id,
+                "couple_id": c_id,
+                "partner_1_id": couple.get("partner_1_id") if couple else None,
+                "partner_2_id": couple.get("partner_2_id") if couple else None,
+                "subscription_until": couple.get("subscription_until") if couple else None,
+            }
+
+        target_pay["status"] = "refunded"
+        target_pay["refund_id"] = refund_id
+        target_pay["refunded_at"] = datetime.now(timezone.utc).isoformat()
+
+        if not couple:
+            return {
+                "already_refunded": False,
+                "payment_id": payment_id,
+                "couple_id": c_id,
+                "partner_1_id": None,
+                "partner_2_id": None,
+                "subscription_until": None,
+            }
+
+        now = datetime.now(timezone.utc)
+        current_until = couple.get("subscription_until")
+        if current_until:
+            try:
+                dt = datetime.fromisoformat(current_until)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                reduced_dt = dt - timedelta(days=days)
+                if reduced_dt <= now:
+                    new_until = now.isoformat()
+                else:
+                    new_until = reduced_dt.isoformat()
+            except Exception:
+                new_until = now.isoformat()
+        else:
+            new_until = now.isoformat()
+
+        couple["subscription_until"] = new_until
+
+        return {
+            "already_refunded": False,
+            "id": couple["id"],
+            "couple_id": couple["id"],
+            "subscription_until": new_until,
+            "partner_1_id": couple["partner_1_id"],
+            "partner_2_id": couple.get("partner_2_id"),
+        }
+
     def get_payments_by_payer_hash(self, payer_hash: str) -> List[Dict[str, Any]]:
         return [p for p in self.payments.values() if p.get("payer_hash") == payer_hash]
 

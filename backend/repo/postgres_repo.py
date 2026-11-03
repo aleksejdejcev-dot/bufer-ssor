@@ -709,6 +709,81 @@ class PostgresRepo:
                     return _format_row(couple_row)
         return self._run_async(_impl())
 
+    def revoke_subscription_for_couple(
+        self,
+        payment_id: str,
+        refund_id: Optional[str] = None,
+        days: int = 30,
+    ) -> Optional[Dict[str, Any]]:
+        async def _impl():
+            pool = await self._get_pool()
+            async with pool.acquire() as conn:
+                async with conn.transaction():
+                    pay_row = await conn.fetchrow("""
+                        SELECT id, status, couple_id
+                        FROM payments
+                        WHERE provider_charge_id = $1
+                        FOR UPDATE;
+                    """, payment_id)
+
+                    if not pay_row:
+                        return None
+
+                    target_couple_uuid = pay_row["couple_id"]
+
+                    if pay_row["status"] == "refunded":
+                        c_info = None
+                        if target_couple_uuid:
+                            c_info = await conn.fetchrow(
+                                "SELECT id, partner_1_id, partner_2_id, subscription_until FROM couples WHERE id = $1;",
+                                target_couple_uuid,
+                            )
+                        return {
+                            "already_refunded": True,
+                            "payment_id": payment_id,
+                            "couple_id": str(target_couple_uuid) if target_couple_uuid else None,
+                            "partner_1_id": c_info["partner_1_id"] if c_info else None,
+                            "partner_2_id": c_info["partner_2_id"] if c_info else None,
+                            "subscription_until": c_info["subscription_until"].isoformat() if (c_info and c_info["subscription_until"]) else None,
+                        }
+
+                    await conn.execute("""
+                        UPDATE payments
+                        SET status = 'refunded', refund_id = $2, refunded_at = now()
+                        WHERE provider_charge_id = $1;
+                    """, payment_id, refund_id)
+
+                    if not target_couple_uuid:
+                        return {
+                            "already_refunded": False,
+                            "payment_id": payment_id,
+                            "couple_id": None,
+                            "partner_1_id": None,
+                            "partner_2_id": None,
+                            "subscription_until": None,
+                        }
+
+                    couple_row = await conn.fetchrow("""
+                        UPDATE couples
+                        SET subscription_until = CASE
+                            WHEN subscription_until IS NULL THEN now()
+                            WHEN subscription_until - ($2 * interval '1 day') <= now() THEN now()
+                            ELSE subscription_until - ($2 * interval '1 day')
+                        END
+                        WHERE id = $1
+                        RETURNING id, subscription_until, partner_1_id, partner_2_id;
+                    """, target_couple_uuid, days)
+
+                    if not couple_row:
+                        return None
+
+                    res = _format_row(couple_row)
+                    res["already_refunded"] = False
+                    res["couple_id"] = str(target_couple_uuid)
+                    res["payment_id"] = payment_id
+                    return res
+        return self._run_async(_impl())
+
     def get_payments_by_payer_hash(self, payer_hash: str) -> List[Dict[str, Any]]:
         async def _impl():
             pool = await self._get_pool()

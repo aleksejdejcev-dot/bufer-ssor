@@ -106,3 +106,26 @@ async def get_yookassa_payment(payment_id: str) -> Dict[str, Any]:
             raise RuntimeError(f"ЮKassa API error ({resp.status_code}): {resp.text}")
 
         return resp.json()
+
+
+async def get_yookassa_refund(refund_id: str) -> Dict[str, Any]:
+    """
+    Получает информацию о возврате напрямую из ЮKassa через GET /v3/refunds/{id}.
+    Используется для проверки подлинности входящих вебхуков возврата.
+    """
+    shop_id = (settings.YOOKASSA_SHOP_ID or "").strip()
+    secret_key = (settings.YOOKASSA_SECRET_KEY or "").strip()
+
+    if not shop_id or not secret_key:
+        raise RuntimeError("YOOKASSA_SHOP_ID и YOOKASSA_SECRET_KEY не настроены")
+
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        resp = await client.get(
+            f"{YOOKASSA_API_BASE}/refunds/{refund_id}",
+            auth=(shop_id, secret_key),
+        )
+        if resp.status_code != 200:
+            logger.error("Ошибка проверки возврата %s в ЮKassa: status=%s, body=%s", refund_id, resp.status_code, resp.text)
+            raise RuntimeError(f"ЮKassa API error ({resp.status_code}): {resp.text}")
+
+        return resp.json()

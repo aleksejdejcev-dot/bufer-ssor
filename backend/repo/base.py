@@ -169,6 +169,20 @@ class Repository(Protocol):
         """
         ...
 
+    def revoke_subscription_for_couple(
+        self,
+        payment_id: str,
+        refund_id: Optional[str] = None,
+        days: int = 30,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Идемпотентно аннулирует подписку для пары при успешном возврате средств (refund.succeeded).
+        Устанавливает payment.status = 'refunded', сохраняет refund_id.
+        Уменьшает subscription_until у couples на days (или устанавливает в now(), если оплаченный период истек).
+        Возвращает данные пары и признак already_refunded=True/False.
+        """
+        ...
+
     def get_payments_by_payer_hash(self, payer_hash: str) -> List[Dict[str, Any]]:
         ...
 

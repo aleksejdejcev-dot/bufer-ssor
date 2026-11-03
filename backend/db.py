@@ -176,6 +176,14 @@ def activate_subscription_for_couple(
     return get_repo().activate_subscription_for_couple(couple_id, payment_id, days)
 
 
+def revoke_subscription_for_couple(
+    payment_id: str,
+    refund_id: Optional[str] = None,
+    days: int = 30,
+) -> Optional[Dict[str, Any]]:
+    return get_repo().revoke_subscription_for_couple(payment_id, refund_id, days)
+
+
 def get_payments_by_payer_hash(payer_hash: str) -> List[Dict[str, Any]]:
     return get_repo().get_payments_by_payer_hash(payer_hash)
 

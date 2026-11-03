@@ -324,3 +324,145 @@ async def test_api_webhook_verification_and_activation():
         me_after = await client.get("/me", headers={"X-Telegram-Init-Data": init_header})
         c_after = me_after.json()["couple"]
         assert c_after["subscription_until"] is not None
+
+
+# ==============================================================================
+# 6. Тесты аннулирования подписки при возврате средств (refund.succeeded)
+# ==============================================================================
+
+def test_revoke_subscription_idempotency(payment_repo):
+    """Проверка аннулирования подписки и идемпотентности возврата."""
+    payment_repo.upsert_user(9051, "Партнер 1")
+    payment_repo.upsert_user(9052, "Партнер 2")
+    c = payment_repo.create_couple(9051, "INVITE9051")
+    payment_repo.join_couple(c["id"], 9052)
+
+    pay_id = f"pay_{uuid.uuid4().hex[:12]}"
+    payment_repo.create_payment(
+        couple_id=c["id"],
+        user_id=9051,
+        payment_id=pay_id,
+        amount=Decimal("199.00"),
+    )
+    # Активируем подписку
+    payment_repo.activate_subscription_for_couple(c["id"], pay_id, days=30)
+    c_active = payment_repo.get_couple_by_id(c["id"])
+    assert c_active["subscription_until"] is not None
+
+    # Первый возврат
+    refund_res1 = payment_repo.revoke_subscription_for_couple(
+        payment_id=pay_id,
+        refund_id="ref_test_001",
+        days=30,
+    )
+    assert refund_res1 is not None
+    assert refund_res1["already_refunded"] is False
+
+    # Проверяем статус платежа
+    pay_row = payment_repo.get_payment(pay_id)
+    assert pay_row["status"] == "refunded"
+    assert pay_row.get("refund_id") == "ref_test_001"
+
+    # Проверяем, что подписка аннулирована (subscription_until <= now)
+    c_revoked = payment_repo.get_couple_by_id(c["id"])
+    dt_until = datetime.fromisoformat(c_revoked["subscription_until"])
+    if dt_until.tzinfo is None:
+        dt_until = dt_until.replace(tzinfo=timezone.utc)
+    assert dt_until <= datetime.now(timezone.utc) + timedelta(seconds=5)
+
+    # Повторный возврат (идемпотентность)
+    refund_res2 = payment_repo.revoke_subscription_for_couple(
+        payment_id=pay_id,
+        refund_id="ref_test_001",
+        days=30,
+    )
+    assert refund_res2 is not None
+    assert refund_res2["already_refunded"] is True
+
+
+@pytest.mark.asyncio
+async def test_api_webhook_refund_succeeded():
+    """Тест обработки входящего вебхука refund.succeeded от ЮKassa."""
+    test_repo = InMemoryRepo()
+    test_repo.reset_state()
+    set_repo(test_repo)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        tg_id = 9061
+        init_header = make_auth_header(tg_id, "ПартнерРефанд")
+
+        await client.post(
+            "/legal/accept",
+            headers={"X-Telegram-Init-Data": init_header},
+            json={"confirm_18_plus": True, "accept_terms": True},
+        )
+        await client.post(
+            "/couple/invite",
+            headers={"X-Telegram-Init-Data": init_header},
+        )
+
+        me_res = await client.get("/me", headers={"X-Telegram-Init-Data": init_header})
+        couple_id = me_res.json()["couple"]["id"]
+
+        payment_id = f"pay_rf_{uuid.uuid4().hex[:12]}"
+        refund_id = f"ref_{uuid.uuid4().hex[:12]}"
+
+        # 1. Создаем платеж и активируем подписку
+        test_repo.create_payment(
+            couple_id=couple_id,
+            user_id=tg_id,
+            payment_id=payment_id,
+            amount=Decimal("199.00"),
+        )
+        test_repo.activate_subscription_for_couple(couple_id, payment_id, days=30)
+
+        # Проверяем, что подписка сейчас активна (дата в будущем)
+        me_before = await client.get("/me", headers={"X-Telegram-Init-Data": init_header})
+        sub_before = me_before.json()["couple"]["subscription_until"]
+        assert sub_before is not None
+        dt_before = datetime.fromisoformat(sub_before)
+        if dt_before.tzinfo is None:
+            dt_before = dt_before.replace(tzinfo=timezone.utc)
+        assert dt_before > datetime.now(timezone.utc)
+
+        # 2. Формируем вебхук возврата от ЮKassa
+        refund_payload = {
+            "type": "notification",
+            "event": "refund.succeeded",
+            "object": {
+                "id": refund_id,
+                "status": "succeeded",
+                "payment_id": payment_id,
+                "amount": {"value": "199.00", "currency": "RUB"},
+            },
+        }
+
+        with patch("main.send_subscription_refund_notice", new=AsyncMock()) as mock_refund_notify:
+            # Отправка вебхука возврата
+            resp1 = await client.post("/api/webhook/yookassa", json=refund_payload)
+            assert resp1.status_code == 200
+            assert resp1.json()["status"] == "ok"
+
+            # Уведомление в бота отправлено
+            mock_refund_notify.assert_called()
+
+            # Повторный вебхук (идемпотентность — статус 200 OK)
+            resp2 = await client.post("/api/webhook/yookassa", json=refund_payload)
+            assert resp2.status_code == 200
+            assert resp2.json()["status"] == "ok"
+
+        # 3. Проверяем в /me, что подписка аннулирована (subscription_until <= now)
+        me_after = await client.get("/me", headers={"X-Telegram-Init-Data": init_header})
+        sub_after = me_after.json()["couple"]["subscription_until"]
+        assert sub_after is not None
+        dt_after = datetime.fromisoformat(sub_after)
+        if dt_after.tzinfo is None:
+            dt_after = dt_after.replace(tzinfo=timezone.utc)
+        assert dt_after <= datetime.now(timezone.utc) + timedelta(seconds=5)
+
+        # 4. Проверяем статус платежа в БД
+        pay_row = test_repo.get_payment(payment_id)
+        assert pay_row["status"] == "refunded"
+        assert pay_row["refund_id"] == refund_id
+

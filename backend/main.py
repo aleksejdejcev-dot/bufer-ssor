@@ -43,10 +43,12 @@ from bot import (
     send_white_flag,
     send_hint_message,
     send_subscription_success,
+    send_subscription_refund_notice,
 )
 from yookassa_service import (
     create_yookassa_payment,
     get_yookassa_payment,
+    get_yookassa_refund,
     get_plan,
     PLANS,
 )
@@ -434,66 +436,107 @@ async def yookassa_webhook(request: Request):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid JSON")
 
     event_type = event_data.get("event")
-    payment_obj = event_data.get("object", {})
-    payment_id = payment_obj.get("id")
+    event_obj = event_data.get("object", {})
 
-    if not payment_id:
-        return {"status": "ignored", "reason": "no_payment_id"}
+    if event_type == "payment.succeeded":
+        payment_id = event_obj.get("id")
 
-    if event_type != "payment.succeeded":
-        logger.info("ЮKassa webhook: событие %s пропущено для payment_id=%s", event_type, payment_id)
-        return {"status": "ok", "action": "ignored"}
+        if not payment_id:
+            return {"status": "ignored", "reason": "no_payment_id"}
 
-    # Проверка безопасности: запрашиваем актуальный статус напрямую в ЮKassa
-    try:
-        actual_payment = await get_yookassa_payment(payment_id)
-    except Exception as e:
-        logger.error("Не удалось верифицировать статус платежа %s в ЮKassa: %s", payment_id, e)
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Failed to verify payment")
-
-    if actual_payment.get("status") != "succeeded":
-        logger.warning(
-            "Поддельный или неактуальный вебхук: в ЮKassa платеж %s имеет статус %s",
-            payment_id,
-            actual_payment.get("status"),
-        )
-        return {"status": "ignored", "reason": "payment_not_succeeded"}
-
-    metadata = actual_payment.get("metadata", {})
-    couple_id = metadata.get("couple_id")
-    plan_name = metadata.get("plan", "month_sub")
-    plan_info = PLANS.get(plan_name, PLANS["month_sub"])
-    days = plan_info.get("days", 30)
-
-    # Атомарно активируем подписку (с защитой от повторных вебхуков)
-    activated = db.activate_subscription_for_couple(
-        couple_id=couple_id,
-        payment_id=payment_id,
-        days=days,
-    )
-
-    if activated:
-        logger.info("Подписка успешно активирована для пары %s (до %s)", couple_id, activated.get("subscription_until"))
-        valid_until_str = str(activated.get("subscription_until", ""))[:10]
+        # Проверка безопасности: запрашиваем актуальный статус напрямую в ЮKassa
         try:
-            raw_sub = activated.get("subscription_until")
-            if raw_sub:
-                dt = datetime.fromisoformat(raw_sub)
-                valid_until_str = dt.strftime("%d.%m.%Y")
-        except Exception:
-            pass
+            actual_payment = await get_yookassa_payment(payment_id)
+        except Exception as e:
+            logger.error("Не удалось верифицировать статус платежа %s в ЮKassa: %s", payment_id, e)
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Failed to verify payment")
 
-        p1_id = activated.get("partner_1_id")
-        p2_id = activated.get("partner_2_id")
+        if actual_payment.get("status") != "succeeded":
+            logger.warning(
+                "Поддельный или неактуальный вебхук: в ЮKassa платеж %s имеет статус %s",
+                payment_id,
+                actual_payment.get("status"),
+            )
+            return {"status": "ignored", "reason": "payment_not_succeeded"}
 
-        if p1_id:
-            asyncio.create_task(send_subscription_success(p1_id, valid_until_str))
-        if p2_id:
-            asyncio.create_task(send_subscription_success(p2_id, valid_until_str))
+        metadata = actual_payment.get("metadata", {})
+        couple_id = metadata.get("couple_id")
+        plan_name = metadata.get("plan", "month_sub")
+        plan_info = PLANS.get(plan_name, PLANS["month_sub"])
+        days = plan_info.get("days", 30)
+
+        # Атомарно активируем подписку (с защитой от повторных вебхуков)
+        activated = db.activate_subscription_for_couple(
+            couple_id=couple_id,
+            payment_id=payment_id,
+            days=days,
+        )
+
+        if activated:
+            logger.info("Подписка успешно активирована для пары %s (до %s)", couple_id, activated.get("subscription_until"))
+            valid_until_str = str(activated.get("subscription_until", ""))[:10]
+            try:
+                raw_sub = activated.get("subscription_until")
+                if raw_sub:
+                    dt = datetime.fromisoformat(raw_sub)
+                    valid_until_str = dt.strftime("%d.%m.%Y")
+            except Exception:
+                pass
+
+            p1_id = activated.get("partner_1_id")
+            p2_id = activated.get("partner_2_id")
+
+            if p1_id:
+                asyncio.create_task(send_subscription_success(p1_id, valid_until_str))
+            if p2_id:
+                asyncio.create_task(send_subscription_success(p2_id, valid_until_str))
+        else:
+            logger.info("Платеж %s уже был обработан ранее (идемпотентный пропуск)", payment_id)
+
+        return {"status": "ok"}
+
+    elif event_type == "refund.succeeded":
+        refund_id = event_obj.get("id")
+        payment_id = event_obj.get("payment_id") or event_obj.get("id")
+
+        if not payment_id:
+            logger.warning("ЮKassa refund webhook: payment_id не указан в событии")
+            return {"status": "ignored", "reason": "no_payment_id"}
+
+        payment_record = db.get_payment(payment_id)
+        if not payment_record:
+            logger.warning("Платеж %s для возврата %s не найден в базе данных", payment_id, refund_id)
+            return {"status": "ok", "reason": "payment_not_found"}
+
+        product_name = payment_record.get("product", "month_sub")
+        plan_info = PLANS.get(product_name, PLANS["month_sub"])
+        days = plan_info.get("days", 30)
+        couple_id = payment_record.get("couple_id")
+
+        revoked = db.revoke_subscription_for_couple(
+            payment_id=payment_id,
+            refund_id=refund_id,
+            days=days,
+        )
+
+        if revoked and not revoked.get("already_refunded"):
+            logger.info("Возврат обработан: payment_id=%s, couple_id=%s", payment_id, couple_id)
+
+            p1_id = revoked.get("partner_1_id")
+            p2_id = revoked.get("partner_2_id")
+
+            if p1_id:
+                asyncio.create_task(send_subscription_refund_notice(p1_id))
+            if p2_id:
+                asyncio.create_task(send_subscription_refund_notice(p2_id))
+        else:
+            logger.info("Возврат для платежа %s уже был обработан ранее (идемпотентный пропуск)", payment_id)
+
+        return {"status": "ok"}
+
     else:
-        logger.info("Платеж %s уже был обработан ранее (идемпотентный пропуск)", payment_id)
-
-    return {"status": "ok"}
+        logger.info("ЮKassa webhook: событие %s пропущено", event_type)
+        return {"status": "ok", "action": "ignored"}
 
 
 # ==============================================================================

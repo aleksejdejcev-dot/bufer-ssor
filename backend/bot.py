@@ -755,3 +755,18 @@ async def send_subscription_success(to_telegram_id: int, valid_until_str: str):
         )
     except Exception as e:
         logger.warning("Не удалось отправить уведомление о подписке (%s): %s", to_telegram_id, e)
+
+
+async def send_subscription_refund_notice(to_telegram_id: int):
+    """
+    Уведомление об отзыве подписки после успешного возврата средств.
+    """
+    text = "ℹ️ Оформлен возврат средств за подписку. Премиум-доступ для вашей пары приостановлен."
+    try:
+        await bot.send_message(
+            chat_id=to_telegram_id,
+            text=text,
+            reply_markup=get_miniapp_keyboard(),
+        )
+    except Exception as e:
+        logger.warning("Не удалось отправить уведомление о возврате пользователю %s: %s", to_telegram_id, e)
