@@ -28,6 +28,7 @@ export default function Home({ meData, onStartSession, onOpenActiveSession, onRe
   const user = meData?.user || {};
   const couple = meData?.couple || null;
   const activeSession = meData?.active_session || null;
+  const isPremium = Boolean(couple?.subscription_until && new Date(couple.subscription_until) > new Date());
 
   // Настроение (1-10)
   const initialMood = couple?.my_mood || 5;
@@ -203,77 +204,77 @@ export default function Home({ meData, onStartSession, onOpenActiveSession, onRe
   };
 
   return (
-    <div className="min-h-screen flex flex-col justify-between p-4 sm:p-5 max-w-md mx-auto animate-fade-in bg-slate-50/50 dark:bg-zinc-950">
-      <div className="space-y-4">
-        {/* Шапка: логотип и кнопка «Оформить Премиум» */}
-        <div className="flex items-center justify-between pt-1">
+    <div className="min-h-screen flex flex-col justify-between px-4 pt-2 pb-4 sm:px-5 sm:pt-3 sm:pb-5 max-w-md mx-auto animate-fade-in bg-slate-50/50 dark:bg-zinc-950">
+      <div className="space-y-3">
+        {/* Шапка: компактный логотип 32x32px, аккуратный заголовок и кнопка/бейдж статуса */}
+        <div className="flex items-center justify-between py-2">
           <div className="flex items-center gap-2.5">
             <img
               src="/logo.png"
               alt="Буфер Ссор"
-              className="w-9 h-9 rounded-xl shadow-sm object-cover ring-1 ring-slate-200/80 dark:ring-zinc-700"
+              className="w-8 h-8 rounded-lg shadow-2xs object-cover ring-1 ring-slate-200/80 dark:ring-zinc-800 shrink-0"
             />
-            <div>
-              <h1 className="font-extrabold text-base text-slate-900 dark:text-slate-100 tracking-tight leading-none">
+            <div className="flex flex-col min-w-0">
+              <h1 className="font-semibold text-[15px] text-slate-900 dark:text-slate-100 tracking-tight leading-tight">
                 Буфер Ссор
               </h1>
-              <span className="text-[10px] text-slate-400 font-medium tracking-wide uppercase">
-                ИИ-медиатор отношений
+              <span className="text-xs text-neutral-400 dark:text-neutral-400 leading-tight">
+                ИИ-медиатор для пар
               </span>
             </div>
           </div>
 
           {couple && (
-            /* Элемент 2: Отдельная кнопка / бейдж «Оформить Премиум» */
-            <button
-              type="button"
-              onClick={() => onPaywallRequired && onPaywallRequired()}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 active:scale-[0.98] text-white text-xs font-semibold shadow-xs shadow-indigo-500/25 transition-all cursor-pointer"
-            >
-              <Sparkles size={13} className="text-amber-300 shrink-0" />
-              <span>
-                {couple.subscription_until && new Date(couple.subscription_until) > new Date()
-                  ? 'Премиум активен'
-                  : 'Оформить Премиум'}
-              </span>
-            </button>
+            isPremium ? (
+              <div
+                role="button"
+                tabIndex={0}
+                onClick={() => onPaywallRequired && onPaywallRequired()}
+                className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 hover:bg-emerald-500/15 transition-all cursor-pointer select-none"
+              >
+                <span>✦ Премиум</span>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => onPaywallRequired && onPaywallRequired()}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 active:scale-95 text-white text-xs font-medium shadow-2xs transition-all cursor-pointer shrink-0"
+              >
+                <Sparkles size={12} className="text-amber-300 shrink-0" />
+                <span>Премиум</span>
+              </button>
+            )
           )}
         </div>
 
-        {/* Элемент 1: Индикатор лимита — аккуратная плашка с текстом «Бесплатных разборов: {count}» */}
+        {/* Slim-плашка статуса тарифа */}
         {couple && (
           <div
             role="button"
             tabIndex={0}
             onClick={() => onPaywallRequired && onPaywallRequired()}
-            className="flex items-center justify-between px-3.5 py-2.5 rounded-xl bg-white dark:bg-zinc-900/90 hover:bg-slate-50 dark:hover:bg-zinc-800/80 border border-slate-200/80 dark:border-zinc-800 shadow-2xs transition-all cursor-pointer group"
+            className="flex items-center justify-between px-3 py-1.5 rounded-xl bg-white/80 dark:bg-zinc-900/40 hover:bg-slate-50 dark:hover:bg-zinc-800/50 border border-slate-200/60 dark:border-white/5 transition-all cursor-pointer group shadow-2xs"
           >
-            <div className="flex items-center gap-2 text-xs">
+            <div className="flex items-center gap-2">
               <span
                 className={`w-2 h-2 rounded-full shrink-0 ${
-                  couple.subscription_until && new Date(couple.subscription_until) > new Date()
-                    ? 'bg-amber-400 animate-pulse'
+                  isPremium
+                    ? 'bg-[#22c55e]'
                     : (couple.free_sessions_left ?? 0) > 0
-                    ? 'bg-emerald-500'
+                    ? 'bg-neutral-400 dark:bg-zinc-500'
                     : 'bg-rose-500'
                 }`}
               />
-              <span className="text-slate-600 dark:text-slate-300 font-medium">
-                {couple.subscription_until && new Date(couple.subscription_until) > new Date()
-                  ? 'Тариф пары:'
-                  : 'Бесплатных разборов:'}
-              </span>
-              <span className="font-bold text-slate-900 dark:text-slate-100">
-                {couple.subscription_until && new Date(couple.subscription_until) > new Date()
-                  ? 'Безлимит (Премиум)'
-                  : (couple.free_sessions_left ?? 0)}
+              <span className="text-xs font-medium text-slate-700 dark:text-zinc-200">
+                {isPremium
+                  ? 'Премиум безлимит'
+                  : `Осталось разборов: ${couple.free_sessions_left ?? 0}`}
               </span>
             </div>
 
-            <div className="flex items-center gap-1 text-[11px] font-medium text-indigo-600 dark:text-indigo-400 group-hover:underline">
-              <span>{couple.subscription_until && new Date(couple.subscription_until) > new Date() ? 'Условия' : 'Пополнить'}</span>
-              <span aria-hidden="true" className="text-xs">›</span>
-            </div>
+            <span className="text-xs text-neutral-400 group-hover:text-neutral-300 transition-colors">
+              {isPremium ? 'Детали ›' : 'Пополнить ›'}
+            </span>
           </div>
         )}
 
