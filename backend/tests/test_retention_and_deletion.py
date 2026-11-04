@@ -63,12 +63,8 @@ def test_retention_purge_flow():
     assert stats["purged_sessions"] == 1
     assert stats["purged_inputs"] == 1
 
-    # Проверяем старую сессию: статус purged_by_retention, советы обнулены
-    purged_s = test_repo.get_session_by_id(s_old["id"])
-    assert purged_s["status"] == "purged_by_retention"
-    assert purged_s["ai_advice_p1"] is None
-    assert purged_s["ai_advice_p2"] is None
-    assert purged_s["shared_summary"] is None
+    # Истекшая сессия и её результаты удалены полностью.
+    assert test_repo.get_session_by_id(s_old["id"]) is None
 
     # Проверяем свежую сессию: не затронута
     kept_s = test_repo.get_session_by_id(s_recent["id"])

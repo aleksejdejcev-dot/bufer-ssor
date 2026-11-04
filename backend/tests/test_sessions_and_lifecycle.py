@@ -170,21 +170,23 @@ async def test_free_sessions(lifecycle_repo):
     couple = repo.create_couple(1001, "INV_C1")
     repo.join_couple(couple["id"], 1002)
     initial_free = couple["free_sessions_left"]
-    assert initial_free == 3
+    assert initial_free == 2
 
     # 1. Сценарий: failed - бесплатный разбор НЕ списывается
-    session_failed = repo.create_conflict_session(couple["id"], 1001)
+    session_failed = repo.create_conflict_session_with_access(couple["id"], 1001)
+    assert repo.get_couple_by_id(couple["id"])["free_sessions_left"] == initial_free
     repo.update_session_status(session_failed["id"], status="failed", completed_at=datetime.now(timezone.utc).isoformat())
     assert repo.get_couple_by_id(couple["id"])["free_sessions_left"] == initial_free
 
     # 2. Сценарий: expired - бесплатный разбор НЕ списывается
-    session_expired = repo.create_conflict_session(couple["id"], 1001)
+    session_expired = repo.create_conflict_session_with_access(couple["id"], 1001)
     repo.expire_session(session_expired["id"])
-    assert repo.get_session_by_id(session_expired["id"])["status"] == "expired"
+    assert repo.get_session_by_id(session_expired["id"]) is None
     assert repo.get_couple_by_id(couple["id"])["free_sessions_left"] == initial_free
 
     # 3. Сценарий: completed без подписки - бесплатный разбор списывается РОВНО 1 раз
-    session_ok = repo.create_conflict_session(couple["id"], 1001)
+    session_ok = repo.create_conflict_session_with_access(couple["id"], 1001)
+    assert repo.get_couple_by_id(couple["id"])["free_sessions_left"] == initial_free
     repo.save_pending_input(session_ok["id"], 1001, "text", crypto.encrypt_text("Позиция 1"))
     repo.save_pending_input(session_ok["id"], 1002, "text", crypto.encrypt_text("Позиция 2"))
 
@@ -208,7 +210,7 @@ async def test_free_sessions(lifecycle_repo):
         couple_updated = repo.get_couple_by_id(couple["id"])
         couple_updated["subscription_until"] = sub_dt.isoformat()
 
-    session_sub = repo.create_conflict_session(couple["id"], 1001)
+    session_sub = repo.create_conflict_session_with_access(couple["id"], 1001)
     repo.save_pending_input(session_sub["id"], 1001, "text", crypto.encrypt_text("Позиция 1"))
     repo.save_pending_input(session_sub["id"], 1002, "text", crypto.encrypt_text("Позиция 2"))
 

@@ -22,6 +22,7 @@ import os
 import uuid
 import hmac
 import hashlib
+from datetime import datetime, timezone
 from typing import Dict, Any, Optional
 import pytest
 from httpx import AsyncClient, ASGITransport
@@ -92,6 +93,7 @@ mem_db = InMemoryDB()
 def patch_db(monkeypatch):
     """Подменяет функции db на in-memory хранилище для детерминированного тестирования"""
     mem_db.reset()
+    rate_counts = {}
     from rate_limiter import limiter
     limiter.clear()
 
@@ -137,6 +139,24 @@ def patch_db(monkeypatch):
             if c["partner_1_id"] == telegram_id or c.get("partner_2_id") == telegram_id:
                 return c
         return None
+
+    def mock_get_subscription_until_for_user(telegram_id: int):
+        return None
+
+    def mock_check_couple_access(couple):
+        until = couple.get("subscription_until")
+        if until and datetime.fromisoformat(until) > datetime.now(timezone.utc):
+            return True, "subscription"
+        if couple.get("free_sessions_left", 0) > 0:
+            return True, "free_session"
+        return False, "no_access"
+
+    def mock_check_rate_limit(key, max_requests, window_seconds):
+        current = rate_counts.get(key, 0)
+        if current >= max_requests:
+            return False, window_seconds
+        rate_counts[key] = current + 1
+        return True, 0
 
     def mock_create_couple(partner_1_id: int, invite_code: str):
         c_id = f"couple_{uuid.uuid4()}"
@@ -213,6 +233,14 @@ def patch_db(monkeypatch):
         mem_db.conflict_sessions[s_id] = s
         return s
 
+    def mock_create_conflict_session_with_access(couple_id: str, initiator_id: int):
+        couple = mem_db.couples.get(couple_id)
+        if not couple or not couple.get("partner_2_id") or couple.get("free_sessions_left", 0) <= 0:
+            return None
+        if mock_get_active_session(couple_id):
+            return None
+        return mock_create_conflict_session(couple_id, initiator_id)
+
     def mock_update_session_status(session_id: str, status: str, **kwargs):
         s = mem_db.conflict_sessions[session_id]
         s["status"] = status
@@ -254,6 +282,9 @@ def patch_db(monkeypatch):
     monkeypatch.setattr(db, "get_couple_by_id", mock_get_couple_by_id)
     monkeypatch.setattr(db, "get_couple_by_invite", mock_get_couple_by_invite)
     monkeypatch.setattr(db, "get_user_couple", mock_get_user_couple)
+    monkeypatch.setattr(db, "get_subscription_until_for_user", mock_get_subscription_until_for_user)
+    monkeypatch.setattr(db, "check_couple_access", mock_check_couple_access)
+    monkeypatch.setattr(db, "check_rate_limit", mock_check_rate_limit)
     monkeypatch.setattr(db, "create_couple", mock_create_couple)
     monkeypatch.setattr(db, "join_couple", mock_join_couple)
     monkeypatch.setattr(db, "update_mood", mock_update_mood)
@@ -261,6 +292,7 @@ def patch_db(monkeypatch):
     monkeypatch.setattr(db, "get_active_session", mock_get_active_session)
     monkeypatch.setattr(db, "get_session_by_id", mock_get_session_by_id)
     monkeypatch.setattr(db, "create_conflict_session", mock_create_conflict_session)
+    monkeypatch.setattr(db, "create_conflict_session_with_access", mock_create_conflict_session_with_access)
     monkeypatch.setattr(db, "update_session_status", mock_update_session_status)
     monkeypatch.setattr(db, "save_pending_input", mock_save_pending_input)
     monkeypatch.setattr(db, "has_user_submitted_input", mock_has_user_submitted)
@@ -351,11 +383,26 @@ async def test_full_api_workflow_between_two_partners():
         assert "18+" in r.json()["detail"]
 
         # 4. Принятие условий: попытка с confirm_18_plus=False -> 400
-        r = await ac.post("/legal/accept", json={"confirm_18_plus": False}, headers=headers_a)
+        r = await ac.post(
+            "/legal/accept",
+            json={"confirm_18_plus": False, "accept_terms": True},
+            headers=headers_a,
+        )
         assert r.status_code == 400
 
         # Успешное принятие условий Партнером А
-        r = await ac.post("/legal/accept", json={"confirm_18_plus": True}, headers=headers_a)
+        r = await ac.post(
+            "/legal/accept",
+            json={"confirm_18_plus": True, "accept_terms": False},
+            headers=headers_a,
+        )
+        assert r.status_code == 400
+
+        r = await ac.post(
+            "/legal/accept",
+            json={"confirm_18_plus": True, "accept_terms": True},
+            headers=headers_a,
+        )
         assert r.status_code == 200
         assert r.json()["status"] == "accepted"
 
@@ -368,7 +415,11 @@ async def test_full_api_workflow_between_two_partners():
         assert f"start=pair_{invite_code}" in invite_info["invite_link"]
 
         # Партнер Б принимает условия 18+
-        r = await ac.post("/legal/accept", json={"confirm_18_plus": True}, headers=headers_b)
+        r = await ac.post(
+            "/legal/accept",
+            json={"confirm_18_plus": True, "accept_terms": True},
+            headers=headers_b,
+        )
         assert r.status_code == 200
 
         # Партнер Б присоединяется к паре
@@ -464,7 +515,11 @@ async def test_session_limit_enforcement():
         headers_a = {"X-Telegram-Init-Data": init_a}
 
         # Принимаем условия 18+
-        await ac.post("/legal/accept", json={"confirm_18_plus": True}, headers=headers_a)
+        await ac.post(
+            "/legal/accept",
+            json={"confirm_18_plus": True, "accept_terms": True},
+            headers=headers_a,
+        )
 
         # Создаем пару с 0 сессий и без подписки
         couple = db.create_couple(partner_1_id=201, invite_code="LIMIT0")
@@ -486,7 +541,11 @@ async def test_rate_limiter_blocks_flooding():
         init_a = make_valid_init_data(3301, "Иван")
         headers_a = {"X-Telegram-Init-Data": init_a}
 
-        await ac.post("/legal/accept", json={"confirm_18_plus": True}, headers=headers_a)
+        await ac.post(
+            "/legal/accept",
+            json={"confirm_18_plus": True, "accept_terms": True},
+            headers=headers_a,
+        )
         couple = db.create_couple(partner_1_id=3301, invite_code="RATE01")
         db.join_couple(couple["id"], 3302)
 

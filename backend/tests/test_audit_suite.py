@@ -406,7 +406,7 @@ def test_retention_purge():
 
     stats = test_repo.purge_expired_data(days_retention=30, hours_raw_ttl=48)
     assert stats["purged_sessions"] == 1
-    assert test_repo.get_session_by_id(s["id"])["status"] == "purged_by_retention"
+    assert test_repo.get_session_by_id(s["id"]) is None
 
 
 # 15. test_delete_flow

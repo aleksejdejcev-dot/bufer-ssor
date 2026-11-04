@@ -60,6 +60,23 @@ def test_validate_production_security_enable_dev_tools():
         validate_production_security(s)
 
 
+def test_yookassa_enabled_requires_credentials_in_production():
+    base = {
+        "ENVIRONMENT": "production",
+        "TELEGRAM_WEBHOOK_SECRET": "secret",
+        "INPUT_ENCRYPTION_KEY": "test-encryption-key-for-testing-only",
+        "PAYMENT_HASH_KEY": "salt",
+        "ENABLE_YOOKASSA": True,
+        "YOOKASSA_SHOP_ID": "",
+        "YOOKASSA_SECRET_KEY": "",
+    }
+    with pytest.raises(RuntimeError, match="YOOKASSA_SHOP_ID обязателен"):
+        validate_production_security(Settings(**base))
+
+    configured = Settings(**{**base, "YOOKASSA_SHOP_ID": "shop", "YOOKASSA_SECRET_KEY": "secret"})
+    validate_production_security(configured)
+
+
 @pytest.mark.postgres
 def test_postgres_repo_blocks_superuser_and_ssl_in_production(monkeypatch):
     """PostgresRepo при ENVIRONMENT=production проверяет rolsuper и ssl_mode при старте."""

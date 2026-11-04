@@ -41,3 +41,13 @@ def get_repo() -> Repository:
 def set_repo(repo: Repository) -> None:
     global _active_repo
     _active_repo = repo
+
+
+def close_repo() -> None:
+    """Closes the active repository, including its pool and worker thread."""
+    global _active_repo
+    repo = _active_repo
+    _active_repo = None
+    close = getattr(repo, "close", None)
+    if callable(close):
+        close()

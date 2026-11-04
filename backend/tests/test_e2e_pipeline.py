@@ -121,9 +121,10 @@ async def test_e2e_pipeline_full_scenario():
     assert couple["free_sessions_left"] == 2
 
     # 4. Старт ссоры
-    session = test_repo.create_conflict_session(couple_id=couple_id, initiator_id=201)
+    session = test_repo.create_conflict_session_with_access(couple_id=couple_id, initiator_id=201)
     session_id = session["id"]
     assert session["status"] == "waiting_partner_2"
+    assert test_repo.get_couple_by_id(couple_id)["free_sessions_left"] == 2
 
     # 5. Партнеры отправляют зашифрованные версии
     enc_a = crypto.encrypt_text("Я очень устал после работы и хочу тишины.")
@@ -151,7 +152,7 @@ async def test_e2e_pipeline_full_scenario():
 
     # Проверка: списана ровно одна бесплатная попытка
     updated_couple = test_repo.get_couple_by_id(couple_id)
-    assert updated_couple["free_sessions_left"] == 2
+    assert updated_couple["free_sessions_left"] == 1
 
     # 8. Проверка изоляции выдачи через API
     # Формируем валидный initData для пользователя A и B
@@ -184,7 +185,7 @@ async def test_e2e_pipeline_full_scenario():
     session2 = test_repo.create_conflict_session(couple_id=couple_id, initiator_id=201)
     test_repo.update_session_status(session2["id"], status="failed")
     # free_sessions_left не должен был измениться
-    assert test_repo.get_couple_by_id(couple_id)["free_sessions_left"] == 2
+    assert test_repo.get_couple_by_id(couple_id)["free_sessions_left"] == 1
 
     # 10. Удаление пары
     test_repo.delete_couple_data(couple_id)
@@ -250,7 +251,7 @@ async def test_stage_3_12_not_applicable_short_circuit():
     assert test_repo.get_couple_by_id(couple_id)["free_sessions_left"] == 2
 
     # 2. Сессия и входные данные (спам / шутка)
-    session = test_repo.create_conflict_session(couple_id=couple_id, initiator_id=501)
+    session = test_repo.create_conflict_session_with_access(couple_id=couple_id, initiator_id=501)
     session_id = session["id"]
 
     p1_bytes = "Рецепт отличных блинов: два яйца, стакан молока...".encode("utf-8")

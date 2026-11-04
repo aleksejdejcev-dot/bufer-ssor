@@ -126,14 +126,22 @@ class PostgresRepo:
         return self._pool
 
     def close(self):
-        if self._advisory_conn is not None:
-            try:
-                self._run_async(self.release_advisory_lock(self._advisory_lock_id or 0))
-            except Exception:
-                pass
-        if self._pool is not None:
-            self._run_async(self._pool.close())
-            self._pool = None
+        try:
+            if self._advisory_conn is not None:
+                try:
+                    self._run_async(self.release_advisory_lock(self._advisory_lock_id or 0))
+                except Exception:
+                    pass
+            if self._pool is not None:
+                self._run_async(self._pool.close())
+                self._pool = None
+        finally:
+            if self._loop.is_running():
+                self._loop.call_soon_threadsafe(self._loop.stop)
+            if self._thread.is_alive():
+                self._thread.join(timeout=5)
+            if not self._loop.is_running() and not self._loop.is_closed():
+                self._loop.close()
 
     # ==========================================================================
     # Методы интерфейса Repository
@@ -440,8 +448,6 @@ class PostgresRepo:
                     )
                     if not premium and couple["free_sessions_left"] <= 0:
                         return None
-                    if not premium:
-                        await conn.execute("UPDATE couples SET free_sessions_left = free_sessions_left - 1 WHERE id = $1;", c_uuid)
                     row = await conn.fetchrow("""
                         INSERT INTO conflict_sessions (couple_id, initiator_id, status)
                         VALUES ($1, $2, 'waiting_partner_2') RETURNING *;
@@ -763,11 +769,13 @@ class PostgresRepo:
                 row = await conn.fetchrow("""
                     INSERT INTO payments (product, amount, currency, provider_charge_id, payer_hash, couple_id, status)
                     VALUES ($1, $2, $3, $4, $5, $6, 'pending')
-                    ON CONFLICT (provider_charge_id) DO UPDATE
-                    SET amount = EXCLUDED.amount,
-                        status = EXCLUDED.status
+                    ON CONFLICT (provider_charge_id) DO NOTHING
                     RETURNING *;
                 """, product, numeric_amount, currency, payment_id, payer_hash, c_uuid)
+                if row is None:
+                    row = await conn.fetchrow(
+                        "SELECT * FROM payments WHERE provider_charge_id = $1;", payment_id
+                    )
                 return _format_row(row)
         return self._run_async(_impl())
 
@@ -804,7 +812,7 @@ class PostgresRepo:
                     if not pay_row:
                         return None
 
-                    if pay_row["status"] == "succeeded":
+                    if pay_row["status"] in ("succeeded", "refunded"):
                         return None
 
                     target_couple_uuid = c_uuid or pay_row["couple_id"]

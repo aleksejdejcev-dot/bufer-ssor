@@ -159,7 +159,7 @@ def test_repo_expire_session(repo):
     repo.expire_session(s_id)
 
     updated = repo.get_session_by_id(s_id)
-    assert updated["status"] == "expired"
+    assert updated is None
     assert repo.count_pending_inputs(s_id) == 0
 
 

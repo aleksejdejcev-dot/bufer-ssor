@@ -131,6 +131,11 @@ def validate_production_security(s: Settings) -> None:
             errors.append("INPUT_ENCRYPTION_KEY обязателен в режиме production")
         if not s.PAYMENT_HASH_KEY:
             errors.append("PAYMENT_HASH_KEY обязателен в режиме production")
+        if s.ENABLE_YOOKASSA:
+            if not s.YOOKASSA_SHOP_ID:
+                errors.append("YOOKASSA_SHOP_ID обязателен, когда ENABLE_YOOKASSA включен")
+            if not s.YOOKASSA_SECRET_KEY:
+                errors.append("YOOKASSA_SECRET_KEY обязателен, когда ENABLE_YOOKASSA включен")
         if s.DATABASE_URL:
             import urllib.parse
             parsed_db = urllib.parse.urlparse(s.DATABASE_URL)

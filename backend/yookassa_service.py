@@ -79,8 +79,8 @@ async def create_yookassa_payment(
             auth=(shop_id, secret_key),
         )
         if resp.status_code not in (200, 201):
-            logger.error("Ошибка создания платежа в ЮKassa: status=%s, body=%s", resp.status_code, resp.text)
-            raise RuntimeError(f"ЮKassa API error ({resp.status_code}): {resp.text}")
+            logger.error("Ошибка создания платежа в ЮKassa: status=%s", resp.status_code)
+            raise RuntimeError(f"ЮKassa API error ({resp.status_code})")
 
         return resp.json()
 
@@ -102,8 +102,8 @@ async def get_yookassa_payment(payment_id: str) -> Dict[str, Any]:
             auth=(shop_id, secret_key),
         )
         if resp.status_code != 200:
-            logger.error("Ошибка проверки платежа %s в ЮKassa: status=%s, body=%s", payment_id, resp.status_code, resp.text)
-            raise RuntimeError(f"ЮKassa API error ({resp.status_code}): {resp.text}")
+            logger.error("Ошибка проверки платежа %s в ЮKassa: status=%s", payment_id, resp.status_code)
+            raise RuntimeError(f"ЮKassa API error ({resp.status_code})")
 
         return resp.json()
 
@@ -125,7 +125,7 @@ async def get_yookassa_refund(refund_id: str) -> Dict[str, Any]:
             auth=(shop_id, secret_key),
         )
         if resp.status_code != 200:
-            logger.error("Ошибка проверки возврата %s в ЮKassa: status=%s, body=%s", refund_id, resp.status_code, resp.text)
-            raise RuntimeError(f"ЮKassa API error ({resp.status_code}): {resp.text}")
+            logger.error("Ошибка проверки возврата %s в ЮKassa: status=%s", refund_id, resp.status_code)
+            raise RuntimeError(f"ЮKassa API error ({resp.status_code})")
 
         return resp.json()

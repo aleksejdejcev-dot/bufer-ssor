@@ -17,6 +17,7 @@ import secrets
 import logging
 import asyncio
 from datetime import datetime
+from decimal import Decimal, InvalidOperation
 from typing import Optional, Literal
 from urllib.parse import parse_qsl, urlencode
 import hmac
@@ -33,7 +34,7 @@ from config import settings
 from config.ui_texts import get_script_hints
 from rate_limiter import generate_crockford_code, normalize_invite_code
 import db
-from repo import get_repo
+from repo import close_repo, get_repo
 from retention_scheduler import retention_worker_loop
 from bot import (
     bot,
@@ -208,6 +209,11 @@ async def lifespan(app: FastAPI):
         logger.error("Background tasks did not stop within shutdown timeout")
 
     try:
+        close_repo()
+    except Exception as e:
+        logger.warning("Repository shutdown failed: %s", e)
+
+    try:
         await bot.session.close()
     except Exception as e:
         logger.debug("bot.session.close exception on shutdown: %s", e)
@@ -373,7 +379,7 @@ async def require_legal_accepted(user: dict = Depends(get_current_user)) -> dict
 
 class LegalAcceptRequest(BaseModel):
     confirm_18_plus: bool = Field(..., description="Подтверждение возраста 18+")
-    accept_terms: bool = Field(True, description="Согласие с условиями использования")
+    accept_terms: bool = Field(..., description="Согласие с условиями использования и политикой конфиденциальности")
 
 
 class MoodRequest(BaseModel):
@@ -461,6 +467,14 @@ async def yookassa_webhook(request: Request):
             )
             return {"status": "ignored", "reason": "payment_not_succeeded"}
 
+        if actual_payment.get("id") != payment_id:
+            logger.error("ЮKassa вернула платёж с несовпадающим ID для вебхука %s", payment_id)
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Payment verification mismatch")
+
+        # Webhook может обогнать сохранение pending-записи в /payment/create.
+        # Данные восстанавливаются только из объекта, повторно полученного из API ЮKassa.
+        _ensure_verified_payment_record(actual_payment)
+
         metadata = actual_payment.get("metadata", {})
         couple_id = metadata.get("couple_id")
         plan_name = metadata.get("plan", "month_sub")
@@ -512,14 +526,25 @@ async def yookassa_webhook(request: Request):
             logger.error("Не удалось верифицировать возврат %s в ЮKassa: %s", refund_id, e)
             raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Failed to verify refund")
 
-        if actual_refund.get("status") != "succeeded" or actual_refund.get("payment_id") != payment_id:
+        if (
+            actual_refund.get("id") != refund_id
+            or actual_refund.get("status") != "succeeded"
+            or actual_refund.get("payment_id") != payment_id
+        ):
             logger.warning("Несовпадение статуса или платежа в вебхуке возврата %s", refund_id)
             return {"status": "ignored", "reason": "refund_not_succeeded_or_payment_mismatch"}
 
         payment_record = db.get_payment(payment_id)
         if not payment_record:
-            logger.warning("Платеж %s для возврата %s не найден в базе данных", payment_id, refund_id)
-            return {"status": "ok", "reason": "payment_not_found"}
+            try:
+                actual_payment = await get_yookassa_payment(payment_id)
+            except Exception as e:
+                logger.error("Не удалось восстановить платеж %s для возврата %s: %s", payment_id, refund_id, e)
+                raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Failed to verify refunded payment")
+            if actual_payment.get("status") != "succeeded" or actual_payment.get("id") != payment_id:
+                logger.error("Не удалось подтвердить исходный платеж %s для возврата %s", payment_id, refund_id)
+                raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Refund payment verification mismatch")
+            payment_record = _ensure_verified_payment_record(actual_payment)
 
         product_name = payment_record.get("product", "month_sub")
         plan_info = PLANS.get(product_name, PLANS["month_sub"])
@@ -550,6 +575,66 @@ async def yookassa_webhook(request: Request):
     else:
         logger.info("ЮKassa webhook: событие %s пропущено", event_type)
         return {"status": "ok", "action": "ignored"}
+
+
+def _ensure_verified_payment_record(payment: dict) -> dict:
+    """Создает отсутствующую запись только по подтвержденному API-объекту ЮKassa."""
+    payment_id = payment.get("id")
+    existing = db.get_payment(payment_id) if payment_id else None
+    if existing:
+        return existing
+
+    metadata = payment.get("metadata")
+    if not isinstance(metadata, dict):
+        metadata = {}
+    plan_name = metadata.get("plan")
+    telegram_id_raw = metadata.get("telegram_id")
+    amount_data = payment.get("amount")
+    if (
+        not payment_id
+        or not isinstance(plan_name, str)
+        or plan_name not in PLANS
+        or not telegram_id_raw
+        or not isinstance(amount_data, dict)
+    ):
+        logger.error("Подтвержденный платеж %s не содержит допустимые метаданные продукта или плательщика", payment_id)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Payment metadata is incomplete")
+
+    try:
+        telegram_id = int(telegram_id_raw)
+        amount = Decimal(str(amount_data.get("value")))
+    except (TypeError, ValueError, InvalidOperation):
+        logger.error("Подтвержденный платеж %s содержит некорректные метаданные", payment_id)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Payment metadata is invalid")
+
+    plan = PLANS[plan_name]
+    currency = amount_data.get("currency")
+    if telegram_id <= 0 or amount != plan["amount"] or currency != plan["currency"]:
+        logger.error("Сумма, валюта или плательщик платежа %s не соответствует тарифу", payment_id)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Payment details do not match plan")
+
+    couple_id = metadata.get("couple_id")
+    if couple_id:
+        try:
+            couple_id = str(uuid.UUID(str(couple_id)))
+        except (TypeError, ValueError, AttributeError):
+            couple_id = None
+        if couple_id and not db.get_couple_by_id(couple_id):
+            couple_id = None
+
+    db.create_payment(
+        couple_id=couple_id,
+        user_id=telegram_id,
+        payment_id=payment_id,
+        amount=amount,
+        currency=currency,
+        product=plan_name,
+    )
+    stored = db.get_payment(payment_id)
+    if not stored:
+        logger.error("Не удалось сохранить запись подтвержденного платежа %s", payment_id)
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Failed to persist verified payment")
+    return stored
 
 
 # ==============================================================================
@@ -622,6 +707,11 @@ async def accept_legal_terms(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Сервис предназначен только для лиц старше 18 лет",
+        )
+    if not payload.accept_terms:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Для продолжения необходимо принять условия сервиса и политику конфиденциальности",
         )
 
     updated_user = db.accept_legal(user["telegram_id"])
@@ -733,6 +823,12 @@ async def create_payment_order(
     """
     Создает платежную сессию в ЮKassa для оформления персональной подписки.
     """
+    if not settings.ENABLE_YOOKASSA:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Оплата временно недоступна",
+        )
+
     telegram_id = user["telegram_id"]
     couple = db.get_user_couple(telegram_id)
 

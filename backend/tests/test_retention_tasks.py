@@ -134,8 +134,7 @@ def test_clean_completed_sessions(repo):
     assert purged == 1
 
     updated_old = repo.get_session_by_id(s_old["id"])
-    assert updated_old["status"] == "purged_by_retention"
-    assert updated_old["ai_advice_p1"] is None
+    assert updated_old is None
 
     updated_recent = repo.get_session_by_id(s_recent["id"])
     assert updated_recent["status"] == "completed"

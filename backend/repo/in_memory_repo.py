@@ -249,17 +249,7 @@ class InMemoryRepo:
             couple = self.couples.get(couple_id)
             if not couple or not self.check_couple_access(couple)[0] or self.get_active_session(couple_id):
                 return None
-            sub_until = couple.get("subscription_until")
-            premium = False
-            if sub_until:
-                try:
-                    premium = datetime.fromisoformat(sub_until) > datetime.now(timezone.utc)
-                except Exception:
-                    premium = False
-            session = self.create_conflict_session(couple_id, initiator_id)
-            if not premium:
-                couple["free_sessions_left"] = max(0, couple.get("free_sessions_left", 0) - 1)
-            return session
+            return self.create_conflict_session(couple_id, initiator_id)
 
     def update_session_status(
         self,
@@ -545,7 +535,6 @@ class InMemoryRepo:
         }
         for p in self.payments.values():
             if p.get("provider_charge_id") == payment_id:
-                p.update(item)
                 return p
         self.payments[pay_id] = item
         return item
@@ -572,7 +561,7 @@ class InMemoryRepo:
         if not target_pay:
             return None
 
-        if target_pay.get("status") == "succeeded":
+        if target_pay.get("status") in ("succeeded", "refunded"):
             return None
 
         c_id = str(couple_id) if couple_id else target_pay.get("couple_id")

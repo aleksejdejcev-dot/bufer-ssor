@@ -155,6 +155,22 @@ def test_activate_subscription_idempotency(payment_repo):
     assert updated_couple["subscription_until"] == first_until
 
 
+def test_duplicate_pending_payment_does_not_reset_final_status(payment_repo):
+    payment_repo.upsert_user(9013, "Плательщик")
+    payment_id = f"pay_{uuid.uuid4().hex[:12]}"
+    payment_repo.create_payment(None, 9013, payment_id, Decimal("199.00"))
+    payment_repo.activate_subscription_for_couple(None, payment_id, days=30, payer_id=9013)
+
+    duplicate = payment_repo.create_payment(None, 9013, payment_id, Decimal("199.00"))
+    assert duplicate["status"] == "succeeded"
+    assert payment_repo.activate_subscription_for_couple(None, payment_id, days=30, payer_id=9013) is None
+
+    # A late payment.succeeded notification must not reactivate a refunded payment.
+    payment_repo.revoke_subscription_for_couple(payment_id, refund_id="refund-test", days=30)
+    assert payment_repo.activate_subscription_for_couple(None, payment_id, days=30, payer_id=9013) is None
+    assert payment_repo.get_payment(payment_id)["status"] == "refunded"
+
+
 # ==============================================================================
 # 3. Тест логики продления (от now или от активной даты)
 # ==============================================================================
@@ -230,7 +246,9 @@ async def test_api_payment_create_endpoint():
             },
         }
 
-        with patch("main.create_yookassa_payment", new=AsyncMock(return_value=mock_yoo_resp)):
+        with patch("main.settings.ENABLE_YOOKASSA", True), patch(
+            "main.create_yookassa_payment", new=AsyncMock(return_value=mock_yoo_resp)
+        ):
             resp = await client.post(
                 "/payment/create",
                 headers={"X-Telegram-Init-Data": init_header},
@@ -241,6 +259,30 @@ async def test_api_payment_create_endpoint():
             data = resp.json()
             assert data["payment_id"] == "2d9b6a12-000f-5000-8000-1db0f269a9b2"
             assert "https://yoomoney.ru" in data["confirmation_url"]
+
+
+@pytest.mark.asyncio
+async def test_payment_endpoint_respects_disabled_flag():
+    test_repo = InMemoryRepo()
+    set_repo(test_repo)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        init_header = make_auth_header(9032, "Плательщик")
+        await client.post(
+            "/legal/accept",
+            headers={"X-Telegram-Init-Data": init_header},
+            json={"confirm_18_plus": True, "accept_terms": True},
+        )
+        with patch("main.settings.ENABLE_YOOKASSA", False), patch(
+            "main.create_yookassa_payment", new=AsyncMock()
+        ) as create_payment:
+            response = await client.post(
+                "/payment/create",
+                headers={"X-Telegram-Init-Data": init_header},
+                json={"plan": "month_sub"},
+            )
+        assert response.status_code == 503
+        create_payment.assert_not_called()
 
 
 # ==============================================================================
@@ -276,14 +318,6 @@ async def test_api_webhook_verification_and_activation():
 
         payment_id = f"2d9b6_{uuid.uuid4().hex[:12]}"
 
-        # Создаем pending платеж в БД
-        test_repo.create_payment(
-            couple_id=couple_id,
-            user_id=tg_id,
-            payment_id=payment_id,
-            amount=Decimal("199.00"),
-        )
-
         # Мокируем ответ YooKassa при прямой проверке GET /v3/payments/{id}
         verified_yoo_obj = {
             "id": payment_id,
@@ -292,6 +326,7 @@ async def test_api_webhook_verification_and_activation():
             "amount": {"value": "199.00", "currency": "RUB"},
             "metadata": {
                 "couple_id": couple_id,
+                "telegram_id": tg_id,
                 "plan": "month_sub",
             },
         }
@@ -311,6 +346,7 @@ async def test_api_webhook_verification_and_activation():
                 wh_resp1 = await client.post("/api/webhook/yookassa", json=webhook_payload)
                 assert wh_resp1.status_code == 200
                 assert wh_resp1.json()["status"] == "ok"
+                assert test_repo.get_payment(payment_id)["status"] == "succeeded"
 
                 # Проверяем, что вызов уведомления произошел
                 mock_notify.assert_called()
