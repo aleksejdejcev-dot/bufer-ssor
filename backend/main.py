@@ -472,10 +472,11 @@ async def yookassa_webhook(request: Request):
             couple_id=couple_id,
             payment_id=payment_id,
             days=days,
+            payer_id=int(metadata["telegram_id"]) if metadata.get("telegram_id") else None,
         )
 
         if activated:
-            logger.info("Подписка успешно активирована для пары %s (до %s)", couple_id, activated.get("subscription_until"))
+            logger.info("Подписка успешно активирована для плательщика %s (до %s)", metadata.get("telegram_id"), activated.get("subscription_until"))
             valid_until_str = str(activated.get("subscription_until", ""))[:10]
             try:
                 raw_sub = activated.get("subscription_until")
@@ -566,6 +567,7 @@ async def get_my_profile(user: dict = Depends(get_current_user)):
 
     couple_info = None
     active_session_info = None
+    subscription_until = db.get_subscription_until_for_user(telegram_id)
 
     if couple:
         is_p1 = (couple["partner_1_id"] == telegram_id)
@@ -579,7 +581,7 @@ async def get_my_profile(user: dict = Depends(get_current_user)):
             "partner_name": other_user["first_name"] if other_user else None,
             "is_partner_1": is_p1,
             "free_sessions_left": couple.get("free_sessions_left", 0),
-            "subscription_until": couple.get("subscription_until"),
+            "subscription_until": subscription_until or couple.get("subscription_until"),
             "my_mood": couple.get("mood_p1") if is_p1 else couple.get("mood_p2"),
             "partner_mood": couple.get("mood_p2") if is_p1 else couple.get("mood_p1"),
         }
@@ -602,6 +604,8 @@ async def get_my_profile(user: dict = Depends(get_current_user)):
             "couple_id": user.get("couple_id"),
         },
         "couple": couple_info,
+        "free_sessions_left": couple.get("free_sessions_left", 2) if couple else 2,
+        "subscription_until": subscription_until or (couple.get("subscription_until") if couple else None),
         "active_session": active_session_info,
     }
 
@@ -727,15 +731,10 @@ async def create_payment_order(
     user: dict = Depends(require_legal_accepted),
 ):
     """
-    Создает платежную сессию в ЮKassa для оформления подписки пары.
+    Создает платежную сессию в ЮKassa для оформления персональной подписки.
     """
     telegram_id = user["telegram_id"]
     couple = db.get_user_couple(telegram_id)
-    if not couple:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Для оформления подписки необходимо состоять в паре",
-        )
 
     try:
         plan_info = get_plan(payload.plan)
@@ -748,7 +747,7 @@ async def create_payment_order(
     try:
         idempotence_key = str(uuid.uuid4())
         metadata = {
-            "couple_id": couple["id"],
+            "couple_id": couple["id"] if couple else None,
             "telegram_id": telegram_id,
             "plan": payload.plan,
         }
@@ -767,7 +766,7 @@ async def create_payment_order(
 
         # Сохраняем pending запись в БД
         db.create_payment(
-            couple_id=couple["id"],
+            couple_id=couple["id"] if couple else None,
             user_id=telegram_id,
             payment_id=payment_id,
             amount=plan_info["amount"],

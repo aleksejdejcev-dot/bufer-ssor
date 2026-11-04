@@ -19,6 +19,7 @@ class InMemoryRepo:
         self.conflict_sessions: Dict[str, Dict[str, Any]] = {}
         self.pending_inputs: Dict[str, Dict[str, Any]] = {}
         self.payments: Dict[str, Dict[str, Any]] = {}
+        self.user_subscriptions: Dict[str, str] = {}
         self.rate_limiter = RateLimiter()
         self.advisory_locks: set[int] = set()
         self.deletions_log: List[Dict[str, Any]] = []
@@ -29,6 +30,7 @@ class InMemoryRepo:
         self.conflict_sessions.clear()
         self.pending_inputs.clear()
         self.payments.clear()
+        self.user_subscriptions.clear()
         self.rate_limiter = RateLimiter()
         self.advisory_locks.clear()
         self.deletions_log.clear()
@@ -134,6 +136,14 @@ class InMemoryRepo:
             c["free_sessions_left"] -= 1
 
     def check_couple_access(self, couple: Dict[str, Any]) -> Tuple[bool, str]:
+        for member_id in (couple.get("partner_1_id"), couple.get("partner_2_id")):
+            until = self.get_subscription_until_for_user(member_id) if member_id else None
+            if until:
+                try:
+                    if datetime.fromisoformat(until) > datetime.now(timezone.utc):
+                        return True, "subscription"
+                except Exception:
+                    pass
         sub_until = couple.get("subscription_until")
         if sub_until:
             try:
@@ -145,6 +155,28 @@ class InMemoryRepo:
         if couple.get("free_sessions_left", 0) > 0:
             return True, "free_session"
         return False, "no_access"
+
+    def get_subscription_until_for_user(self, telegram_id: int) -> Optional[str]:
+        until = self.user_subscriptions.get(self._hash_id(telegram_id))
+        couple = self.get_user_couple(telegram_id)
+        member_until = [self.user_subscriptions.get(self._hash_id(member_id))
+                        for member_id in ((couple or {}).get("partner_1_id"), (couple or {}).get("partner_2_id"))
+                        if member_id]
+        values = [value for value in [until, *(member_until or [])] if value]
+        legacy = couple.get("subscription_until") if couple else None
+        if legacy:
+            values.append(legacy)
+        valid = []
+        for value in values:
+            try:
+                parsed = datetime.fromisoformat(value)
+                if parsed.tzinfo is None:
+                    parsed = parsed.replace(tzinfo=timezone.utc)
+                if parsed > datetime.now(timezone.utc):
+                    valid.append((parsed, value))
+            except Exception:
+                continue
+        return max(valid, default=(None, None))[1]
 
     def add_free_sessions(self, couple_id: str, count: int) -> Dict[str, Any]:
         c = self.couples.get(couple_id)
@@ -475,6 +507,7 @@ class InMemoryRepo:
         couple_id: Any,
         payment_id: str,
         days: int = 30,
+        payer_id: Optional[int] = None,
     ) -> Optional[Dict[str, Any]]:
         target_pay = None
         for p in self.payments.values():
@@ -489,15 +522,17 @@ class InMemoryRepo:
             return None
 
         c_id = str(couple_id) if couple_id else target_pay.get("couple_id")
-        if not c_id or c_id not in self.couples:
-            return None
+        if not c_id and payer_id:
+            user_couple = self.get_user_couple(payer_id)
+            c_id = user_couple.get("id") if user_couple else None
 
         target_pay["status"] = "succeeded"
         target_pay["paid_at"] = datetime.now(timezone.utc).isoformat()
 
-        couple = self.couples[c_id]
         now = datetime.now(timezone.utc)
-        current_until = couple.get("subscription_until")
+        payer_hash = target_pay["payer_hash"]
+        couple = self.couples.get(c_id) if c_id else None
+        current_until = self.user_subscriptions.get(payer_hash) or (couple.get("subscription_until") if couple else None)
         if current_until:
             try:
                 dt = datetime.fromisoformat(current_until)
@@ -510,13 +545,16 @@ class InMemoryRepo:
             base_date = now
 
         new_until = (base_date + timedelta(days=days)).isoformat()
-        couple["subscription_until"] = new_until
+        self.user_subscriptions[payer_hash] = new_until
+
+        if couple:
+            couple["subscription_until"] = new_until
 
         return {
-            "id": couple["id"],
+            "id": couple["id"] if couple else None,
             "subscription_until": new_until,
-            "partner_1_id": couple["partner_1_id"],
-            "partner_2_id": couple.get("partner_2_id"),
+            "partner_1_id": couple.get("partner_1_id") if couple else payer_id,
+            "partner_2_id": couple.get("partner_2_id") if couple else None,
         }
 
     def revoke_subscription_for_couple(
@@ -550,6 +588,13 @@ class InMemoryRepo:
         target_pay["status"] = "refunded"
         target_pay["refund_id"] = refund_id
         target_pay["refunded_at"] = datetime.now(timezone.utc).isoformat()
+        current_owner_until = self.user_subscriptions.get(target_pay.get("payer_hash"))
+        if current_owner_until:
+            owner_dt = datetime.fromisoformat(current_owner_until)
+            now_utc = datetime.now(timezone.utc)
+            if owner_dt.tzinfo is None:
+                owner_dt = owner_dt.replace(tzinfo=timezone.utc)
+            self.user_subscriptions[target_pay["payer_hash"]] = max(now_utc, owner_dt - timedelta(days=days)).isoformat()
 
         if not couple:
             return {

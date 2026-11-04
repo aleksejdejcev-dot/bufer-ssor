@@ -29,7 +29,9 @@ export default function Home({ meData, onStartSession, onOpenActiveSession, onRe
   const user = meData?.user || {};
   const couple = meData?.couple || null;
   const activeSession = meData?.active_session || null;
-  const isPremium = Boolean(couple?.subscription_until && new Date(couple.subscription_until) > new Date());
+  const subscriptionUntil = meData?.subscription_until || couple?.subscription_until;
+  const freeSessionsLeft = couple?.free_sessions_left ?? meData?.free_sessions_left ?? 2;
+  const isPremium = Boolean(subscriptionUntil && new Date(subscriptionUntil) > new Date());
 
   // Настроение (1-10)
   const initialMood = couple?.my_mood || 5;
@@ -158,6 +160,7 @@ export default function Home({ meData, onStartSession, onOpenActiveSession, onRe
     try {
       WebApp.HapticFeedback?.impactOccurred('light');
       const res = await api.createInvite();
+      await onRefreshProfile?.();
       const link = res.invite_link;
       const shareText = 'Давай подключимся к «Буферу Ссор» — здесь можно безопасно и бережно разбирать наши разногласия.';
       const shareUrl = `https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent(shareText)}`;
@@ -241,8 +244,7 @@ export default function Home({ meData, onStartSession, onOpenActiveSession, onRe
             </div>
           </div>
 
-          {couple && (
-            isPremium ? (
+          {isPremium ? (
               <div
                 role="button"
                 tabIndex={0}
@@ -260,13 +262,11 @@ export default function Home({ meData, onStartSession, onOpenActiveSession, onRe
                 <Sparkles size={12} className="text-amber-300 shrink-0" />
                 <span>Премиум</span>
               </button>
-            )
-          )}
+            )}
         </div>
 
         {/* Slim-плашка статуса тарифа */}
-        {couple && (
-          <div
+        <div
             role="button"
             tabIndex={0}
             onClick={() => onPaywallRequired && onPaywallRequired()}
@@ -277,7 +277,7 @@ export default function Home({ meData, onStartSession, onOpenActiveSession, onRe
                 className={`w-2 h-2 rounded-full shrink-0 ${
                   isPremium
                     ? 'bg-[#22c55e]'
-                    : (couple.free_sessions_left ?? 0) > 0
+                    : freeSessionsLeft > 0
                     ? 'bg-neutral-400 dark:bg-zinc-500'
                     : 'bg-rose-500'
                 }`}
@@ -285,15 +285,14 @@ export default function Home({ meData, onStartSession, onOpenActiveSession, onRe
               <span className="text-xs font-medium text-slate-700 dark:text-zinc-200">
                 {isPremium
                   ? 'Премиум безлимит'
-                  : `Осталось разборов: ${couple.free_sessions_left ?? 0}`}
+                  : `Осталось разборов: ${freeSessionsLeft}`}
               </span>
             </div>
 
             <span className="text-xs text-neutral-400 group-hover:text-neutral-300 transition-colors">
               {isPremium ? 'Детали ›' : 'Пополнить ›'}
             </span>
-          </div>
-        )}
+        </div>
 
         {globalError && (
           <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 text-xs border border-rose-200 dark:border-rose-900 flex items-center justify-between animate-fade-in">

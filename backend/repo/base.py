@@ -44,6 +44,9 @@ class Repository(Protocol):
     def check_couple_access(self, couple: Dict[str, Any]) -> Tuple[bool, str]:
         ...
 
+    def get_subscription_until_for_user(self, telegram_id: int) -> Optional[str]:
+        ...
+
     def add_free_sessions(self, couple_id: str, count: int) -> Dict[str, Any]:
         ...
 
@@ -165,11 +168,12 @@ class Repository(Protocol):
         couple_id: Any,
         payment_id: str,
         days: int = 30,
+        payer_id: Optional[int] = None,
     ) -> Optional[Dict[str, Any]]:
         """
-        Идемпотентно активирует подписку для пары при успешной оплате.
+        Идемпотентно активирует подписку владельца платежа при успешной оплате.
         Если платеж уже обработан (status == 'succeeded'), возвращает None.
-        Обновляет payment.status = 'succeeded' и couples.subscription_until в единой транзакции.
+        Обновляет платеж и персональное право подписки в единой транзакции.
         """
         ...
 

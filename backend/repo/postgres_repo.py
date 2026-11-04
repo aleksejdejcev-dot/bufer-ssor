@@ -149,6 +149,7 @@ class PostgresRepo:
                     DELETE FROM pending_inputs;
                     DELETE FROM conflict_sessions;
                     DELETE FROM payments;
+                    DELETE FROM user_subscriptions;
                     DELETE FROM couples;
                     DELETE FROM users;
                 """)
@@ -229,7 +230,7 @@ class PostgresRepo:
                 async with conn.transaction():
                     row = await conn.fetchrow("""
                         INSERT INTO couples (partner_1_id, invite_code, free_sessions_left)
-                        VALUES ($1, $2, 3)
+                        VALUES ($1, $2, 2)
                         RETURNING *;
                     """, partner_1_id, norm_code)
                     couple_data = _format_row(row)
@@ -302,9 +303,40 @@ class PostgresRepo:
                     return True, "subscription"
             except Exception:
                 pass
+        for user_id in (couple.get("partner_1_id"), couple.get("partner_2_id")):
+            if not user_id:
+                continue
+            until = self.get_subscription_until_for_user(int(user_id))
+            if until:
+                try:
+                    if datetime.fromisoformat(until) > datetime.now(timezone.utc):
+                        return True, "subscription"
+                except ValueError:
+                    pass
         if couple.get("free_sessions_left", 0) > 0:
             return True, "free_session"
         return False, "no_access"
+
+    def get_subscription_until_for_user(self, telegram_id: int) -> Optional[str]:
+        hashes = {self._hash_id(telegram_id)}
+        couple = self.get_user_couple(telegram_id)
+        if couple:
+            for member_id in (couple.get("partner_1_id"), couple.get("partner_2_id")):
+                if member_id:
+                    hashes.add(self._hash_id(member_id))
+        async def _impl():
+            pool = await self._get_pool()
+            async with pool.acquire() as conn:
+                row = await conn.fetchrow("""
+                    SELECT GREATEST(
+                        (SELECT MAX(subscription_until) FROM user_subscriptions WHERE payer_hash = ANY($1::text[])),
+                        (SELECT MAX(subscription_until) FROM couples
+                         WHERE (partner_1_id = $2 OR partner_2_id = $2) AND subscription_until > now())
+                    ) AS subscription_until;
+                """, list(hashes), telegram_id)
+                value = row["subscription_until"] if row else None
+                return value.isoformat() if value else None
+        return self._run_async(_impl())
 
     def add_free_sessions(self, couple_id: str, count: int) -> Dict[str, Any]:
         async def _impl():
@@ -363,7 +395,7 @@ class PostgresRepo:
             async with pool.acquire() as conn:
                 async with conn.transaction():
                     couple = await conn.fetchrow("""
-                        SELECT free_sessions_left, subscription_until
+                        SELECT free_sessions_left, subscription_until, partner_1_id, partner_2_id
                         FROM couples WHERE id = $1 FOR UPDATE;
                     """, c_uuid)
                     if not couple:
@@ -387,7 +419,16 @@ class PostgresRepo:
                     """, c_uuid)
                     if active:
                         return None
-                    premium = couple["subscription_until"] and couple["subscription_until"] > datetime.now(timezone.utc)
+                    owner_hashes = [self._hash_id(member_id) for member_id in
+                                    (couple["partner_1_id"], couple["partner_2_id"]) if member_id]
+                    owner_until = await conn.fetchval("""
+                        SELECT MAX(subscription_until) FROM user_subscriptions
+                        WHERE payer_hash = ANY($1::text[]);
+                    """, owner_hashes)
+                    premium = bool(
+                        (couple["subscription_until"] and couple["subscription_until"] > datetime.now(timezone.utc))
+                        or (owner_until and owner_until > datetime.now(timezone.utc))
+                    )
                     if not premium and couple["free_sessions_left"] <= 0:
                         return None
                     if not premium:
@@ -710,6 +751,7 @@ class PostgresRepo:
         couple_id: Any,
         payment_id: str,
         days: int = 30,
+        payer_id: Optional[int] = None,
     ) -> Optional[Dict[str, Any]]:
         async def _impl():
             pool = await self._get_pool()
@@ -717,7 +759,7 @@ class PostgresRepo:
             async with pool.acquire() as conn:
                 async with conn.transaction():
                     pay_row = await conn.fetchrow("""
-                        SELECT id, status, couple_id
+                        SELECT id, status, couple_id, payer_hash
                         FROM payments
                         WHERE provider_charge_id = $1
                         FOR UPDATE;
@@ -730,26 +772,47 @@ class PostgresRepo:
                         return None
 
                     target_couple_uuid = c_uuid or pay_row["couple_id"]
-                    if not target_couple_uuid:
-                        return None
+                    if not target_couple_uuid and payer_id:
+                        target_couple_uuid = await conn.fetchval(
+                            "SELECT couple_id FROM users WHERE telegram_id = $1;", payer_id
+                        )
+
+                    entitlement = await conn.fetchrow(
+                        "SELECT subscription_until FROM user_subscriptions WHERE payer_hash = $1 FOR UPDATE;",
+                        pay_row["payer_hash"],
+                    )
+                    current_until = entitlement["subscription_until"] if entitlement else None
+                    couple_row = None
+                    if target_couple_uuid:
+                        couple_row = await conn.fetchrow(
+                            "SELECT id, subscription_until, partner_1_id, partner_2_id FROM couples WHERE id = $1 FOR UPDATE;",
+                            target_couple_uuid,
+                        )
+                        if couple_row and couple_row["subscription_until"]:
+                            current_until = max(current_until, couple_row["subscription_until"]) if current_until else couple_row["subscription_until"]
+
+                    base_until = max(current_until, datetime.now(timezone.utc)) if current_until else datetime.now(timezone.utc)
+                    new_until = base_until + timedelta(days=days)
 
                     await conn.execute("""
                         UPDATE payments
                         SET status = 'succeeded', paid_at = now()
                         WHERE provider_charge_id = $1;
                     """, payment_id)
-
-                    couple_row = await conn.fetchrow("""
-                        UPDATE couples
-                        SET subscription_until = GREATEST(COALESCE(subscription_until, now()), now()) + ($2 * interval '1 day')
-                        WHERE id = $1
-                        RETURNING id, subscription_until, partner_1_id, partner_2_id;
-                    """, target_couple_uuid, days)
-
-                    if not couple_row:
-                        return None
-
-                    return _format_row(couple_row)
+                    await conn.execute("""
+                        INSERT INTO user_subscriptions (payer_hash, subscription_until)
+                        VALUES ($1, $2)
+                        ON CONFLICT (payer_hash) DO UPDATE
+                        SET subscription_until = EXCLUDED.subscription_until, updated_at = now();
+                    """, pay_row["payer_hash"], new_until)
+                    if couple_row:
+                        await conn.execute("UPDATE couples SET subscription_until = $2 WHERE id = $1;", target_couple_uuid, new_until)
+                    result = _format_row(couple_row) if couple_row else {}
+                    result.update({"id": str(target_couple_uuid) if target_couple_uuid else None,
+                                   "subscription_until": new_until.isoformat(),
+                                   "partner_1_id": couple_row["partner_1_id"] if couple_row else payer_id,
+                                   "partner_2_id": couple_row["partner_2_id"] if couple_row else None})
+                    return result
         return self._run_async(_impl())
 
     def revoke_subscription_for_couple(
@@ -763,7 +826,7 @@ class PostgresRepo:
             async with pool.acquire() as conn:
                 async with conn.transaction():
                     pay_row = await conn.fetchrow("""
-                        SELECT id, status, couple_id
+                        SELECT id, status, couple_id, payer_hash
                         FROM payments
                         WHERE provider_charge_id = $1
                         FOR UPDATE;
@@ -795,6 +858,13 @@ class PostgresRepo:
                         SET status = 'refunded', refund_id = $2, refunded_at = now()
                         WHERE provider_charge_id = $1;
                     """, payment_id, refund_id)
+
+                    await conn.execute("""
+                        UPDATE user_subscriptions
+                        SET subscription_until = GREATEST(now(), subscription_until - ($2 * interval '1 day')),
+                            updated_at = now()
+                        WHERE payer_hash = $1;
+                    """, pay_row["payer_hash"], days)
 
                     if not target_couple_uuid:
                         return {
