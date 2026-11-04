@@ -37,6 +37,10 @@ class Repository(Protocol):
     def decrement_free_sessions(self, couple_id: str) -> None:
         ...
 
+    def create_conflict_session_with_access(self, couple_id: str, initiator_id: int) -> Optional[Dict[str, Any]]:
+        """Атомарно создает сессию и списывает бесплатный разбор, если подписки нет."""
+        ...
+
     def check_couple_access(self, couple: Dict[str, Any]) -> Tuple[bool, str]:
         ...
 

@@ -68,7 +68,7 @@ export default function LegalModal({ docKey, onClose }) {
       onClick={onClose}
     >
       <div 
-        className="w-full sm:max-w-md bg-white dark:bg-zinc-900 rounded-t-2xl sm:rounded-2xl max-h-[85vh] flex flex-col shadow-xl animate-slide-up border border-slate-200/60 dark:border-zinc-800"
+        className="w-full sm:max-w-md bg-white dark:bg-zinc-900 rounded-t-2xl sm:rounded-2xl max-h-[calc(var(--tg-viewport-stable-height,100vh)-env(safe-area-inset-top)-env(safe-area-inset-bottom))] flex flex-col shadow-xl animate-slide-up border border-slate-200/60 dark:border-zinc-800"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Заголовок модального окна */}
@@ -101,7 +101,7 @@ export default function LegalModal({ docKey, onClose }) {
         </div>
 
         {/* Кнопка закрытия */}
-        <div className="p-4 border-t border-slate-100 dark:border-zinc-800/80 bg-slate-50/50 dark:bg-zinc-900/50 rounded-b-2xl">
+        <div className="p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] border-t border-slate-100 dark:border-zinc-800/80 bg-slate-50/50 dark:bg-zinc-900/50 rounded-b-2xl shrink-0">
           <button
             onClick={onClose}
             className="w-full py-2.5 px-4 bg-slate-900 dark:bg-slate-100 hover:bg-slate-800 dark:hover:bg-white text-white dark:text-slate-900 text-sm font-medium rounded-xl transition-colors"

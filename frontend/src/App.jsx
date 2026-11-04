@@ -16,6 +16,7 @@ export default function App() {
 
   // Инициализация Telegram WebApp и синхронизация темы
   useEffect(() => {
+    let themeHandler;
     try {
       if (WebApp) {
         WebApp.ready();
@@ -30,17 +31,21 @@ export default function App() {
         }
 
         // Подписка на смену темы в Telegram
-        WebApp.onEvent('themeChanged', () => {
+        themeHandler = () => {
           if (WebApp.colorScheme === 'dark') {
             document.documentElement.classList.add('dark');
           } else {
             document.documentElement.classList.remove('dark');
           }
-        });
+        };
+        WebApp.onEvent('themeChanged', themeHandler);
       }
     } catch (e) {
       console.warn('WebApp initialization error:', e);
     }
+    return () => {
+      if (themeHandler) WebApp.offEvent('themeChanged', themeHandler);
+    };
   }, []);
 
   // Загрузка профиля пользователя и пары

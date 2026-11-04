@@ -211,10 +211,10 @@ export default function Home({ meData, onStartSession, onOpenActiveSession, onRe
     } catch {}
 
     const supportUrl = 'https://t.me/Griiikkk';
-    if (window.Telegram?.WebApp?.openTelegramLink) {
-      window.Telegram.WebApp.openTelegramLink(supportUrl);
-    } else if (WebApp?.openTelegramLink) {
+    if (WebApp?.openTelegramLink) {
       WebApp.openTelegramLink(supportUrl);
+    } else if (window.Telegram?.WebApp?.openTelegramLink) {
+      window.Telegram.WebApp.openTelegramLink(supportUrl);
     } else {
       window.open(supportUrl, '_blank');
     }

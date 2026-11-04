@@ -57,7 +57,7 @@ def test_repo_create_and_join_couple(repo):
     couple = repo.create_couple(1101, "INV-1101")
     assert couple["partner_1_id"] == 1101
     assert couple["partner_2_id"] is None
-    assert couple["free_sessions_left"] == 3
+    assert couple["free_sessions_left"] == 2
 
     # Поиск по инвайту
     by_invite = repo.get_couple_by_invite("INV-1101")

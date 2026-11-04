@@ -438,7 +438,11 @@ async def test_api_webhook_refund_succeeded():
             },
         }
 
-        with patch("main.send_subscription_refund_notice", new=AsyncMock()) as mock_refund_notify:
+        with patch("main.get_yookassa_refund", new=AsyncMock(return_value={
+            "id": refund_id,
+            "status": "succeeded",
+            "payment_id": payment_id,
+        })), patch("main.send_subscription_refund_notice", new=AsyncMock()) as mock_refund_notify:
             # Отправка вебхука возврата
             resp1 = await client.post("/api/webhook/yookassa", json=refund_payload)
             assert resp1.status_code == 200

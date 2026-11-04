@@ -27,6 +27,8 @@ body {
   background-color: var(--tg-theme-bg-color);
   color: var(--tg-theme-text-color);
   overflow-x: hidden;
+  min-height: 100vh;
+  min-height: var(--tg-viewport-stable-height, 100vh);
 }
 
 /* Плавный скролл */

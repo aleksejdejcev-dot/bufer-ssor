@@ -194,16 +194,18 @@ async def lifespan(app: FastAPI):
     # Корректное завершение фоновых задач (Shutdown)
     logger.info("Stopping Telegram long polling and background tasks...")
     try:
-        await dp.stop_polling()
+        await asyncio.wait_for(dp.stop_polling(), timeout=10.0)
     except Exception as e:
         logger.debug("dp.stop_polling exception on shutdown: %s", e)
 
-    polling_task.cancel()
-    retention_task.cancel()
+    for task in (polling_task, retention_task):
+        task.cancel()
     try:
-        await asyncio.gather(polling_task, retention_task, return_exceptions=True)
-    except Exception:
-        pass
+        await asyncio.wait_for(
+            asyncio.gather(polling_task, retention_task, return_exceptions=True), timeout=15.0
+        )
+    except asyncio.TimeoutError:
+        logger.error("Background tasks did not stop within shutdown timeout")
 
     try:
         await bot.session.close()
@@ -497,11 +499,21 @@ async def yookassa_webhook(request: Request):
 
     elif event_type == "refund.succeeded":
         refund_id = event_obj.get("id")
-        payment_id = event_obj.get("payment_id") or event_obj.get("id")
+        payment_id = event_obj.get("payment_id")
 
-        if not payment_id:
-            logger.warning("ЮKassa refund webhook: payment_id не указан в событии")
-            return {"status": "ignored", "reason": "no_payment_id"}
+        if not refund_id or not payment_id:
+            logger.warning("ЮKassa refund webhook: отсутствует refund_id или payment_id")
+            return {"status": "ignored", "reason": "missing_refund_or_payment_id"}
+
+        try:
+            actual_refund = await get_yookassa_refund(refund_id)
+        except Exception as e:
+            logger.error("Не удалось верифицировать возврат %s в ЮKassa: %s", refund_id, e)
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Failed to verify refund")
+
+        if actual_refund.get("status") != "succeeded" or actual_refund.get("payment_id") != payment_id:
+            logger.warning("Несовпадение статуса или платежа в вебхуке возврата %s", refund_id)
+            return {"status": "ignored", "reason": "refund_not_succeeded_or_payment_mismatch"}
 
         payment_record = db.get_payment(payment_id)
         if not payment_record:
@@ -806,24 +818,19 @@ async def start_conflict_session(user: dict = Depends(require_legal_accepted)):
             headers={"Retry-After": str(retry_after)},
         )
 
-    # Проверка лимитов бесплатных сессий / подписки
-    has_access, reason = db.check_couple_access(couple)
-    if not has_access:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Бесплатные разборы закончились. Оформите подписку в приложении.",
-        )
-
-    # Проверяем, нет ли уже запущенной сессии
-    active_session = db.get_active_session(couple["id"])
-    if active_session:
+    # Атомарно проверяем доступ, списываем бесплатный разбор и создаем сессию.
+    session = db.create_conflict_session_with_access(couple_id=couple["id"], initiator_id=telegram_id)
+    if not session:
+        couple = db.get_couple_by_id(couple["id"]) or couple
+        if not db.check_couple_access(couple)[0]:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Бесплатные разборы закончились. Оформите подписку в приложении.",
+            )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="В вашей паре уже есть активный разбор. Завершите его перед началом нового.",
         )
-
-    # Создаем новую сессию
-    session = db.create_conflict_session(couple_id=couple["id"], initiator_id=telegram_id)
 
     # Бот пишет Партнеру А приглашение рассказать позицию
     asyncio.create_task(notify_initiator_prompt(telegram_id))

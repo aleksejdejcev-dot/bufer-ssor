@@ -356,6 +356,49 @@ class PostgresRepo:
                 return _format_row(row)
         return self._run_async(_impl())
 
+    def create_conflict_session_with_access(self, couple_id: str, initiator_id: int) -> Optional[Dict[str, Any]]:
+        async def _impl():
+            pool = await self._get_pool()
+            c_uuid = uuid.UUID(couple_id)
+            async with pool.acquire() as conn:
+                async with conn.transaction():
+                    couple = await conn.fetchrow("""
+                        SELECT free_sessions_left, subscription_until
+                        FROM couples WHERE id = $1 FOR UPDATE;
+                    """, c_uuid)
+                    if not couple:
+                        return None
+                    active = await conn.fetchval("""
+                        SELECT EXISTS(
+                            SELECT 1 FROM conflict_sessions
+                            WHERE couple_id = $1 AND status IN ('waiting_partner_2', 'processing', 'analyzing')
+                        );
+                    """, c_uuid)
+                    if active:
+                        return None
+                    # Защищает также от конкурентных транзакций, которые не видят
+                    # незакоммиченную строку сессии друг друга.
+                    await conn.execute("SELECT pg_advisory_xact_lock(hashtext($1));", couple_id)
+                    active = await conn.fetchval("""
+                        SELECT EXISTS(
+                            SELECT 1 FROM conflict_sessions
+                            WHERE couple_id = $1 AND status IN ('waiting_partner_2', 'processing', 'analyzing')
+                        );
+                    """, c_uuid)
+                    if active:
+                        return None
+                    premium = couple["subscription_until"] and couple["subscription_until"] > datetime.now(timezone.utc)
+                    if not premium and couple["free_sessions_left"] <= 0:
+                        return None
+                    if not premium:
+                        await conn.execute("UPDATE couples SET free_sessions_left = free_sessions_left - 1 WHERE id = $1;", c_uuid)
+                    row = await conn.fetchrow("""
+                        INSERT INTO conflict_sessions (couple_id, initiator_id, status)
+                        VALUES ($1, $2, 'waiting_partner_2') RETURNING *;
+                    """, c_uuid, initiator_id)
+                    return _format_row(row)
+        return self._run_async(_impl())
+
     def update_session_status(
         self,
         session_id: str,

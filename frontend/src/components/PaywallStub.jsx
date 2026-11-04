@@ -21,10 +21,10 @@ export default function PaywallStub({ onBack }) {
       WebApp.HapticFeedback?.impactOccurred('medium');
       const res = await api.createPayment('month_sub');
       if (res && res.confirmation_url) {
-        if (window.Telegram?.WebApp?.openLink) {
-          window.Telegram.WebApp.openLink(res.confirmation_url);
-        } else if (WebApp?.openLink) {
+        if (WebApp?.openLink) {
           WebApp.openLink(res.confirmation_url);
+        } else if (window.Telegram?.WebApp?.openLink) {
+          window.Telegram.WebApp.openLink(res.confirmation_url);
         } else {
           window.open(res.confirmation_url, '_blank');
         }

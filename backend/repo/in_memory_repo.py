@@ -3,6 +3,7 @@ InMemory реализация интерфейса Repository для локал�
 """
 
 import uuid
+import threading
 import hashlib
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, Optional, List, Tuple
@@ -12,6 +13,7 @@ from rate_limiter import RateLimiter, normalize_invite_code
 
 class InMemoryRepo:
     def __init__(self):
+        self._session_lock = threading.RLock()
         self.users: Dict[int, Dict[str, Any]] = {}
         self.couples: Dict[str, Dict[str, Any]] = {}
         self.conflict_sessions: Dict[str, Dict[str, Any]] = {}
@@ -93,7 +95,7 @@ class InMemoryRepo:
             "invite_code": invite_code,
             "invite_created_at": now,
             "invite_expires_at": (now_dt + timedelta(days=7)).isoformat(),
-            "free_sessions_left": 3,
+            "free_sessions_left": 2,
             "subscription_until": None,
             "mood_p1": None,
             "mood_p2": None,
@@ -180,6 +182,23 @@ class InMemoryRepo:
         }
         self.conflict_sessions[s_id] = session
         return session
+
+    def create_conflict_session_with_access(self, couple_id: str, initiator_id: int) -> Optional[Dict[str, Any]]:
+        with self._session_lock:
+            couple = self.couples.get(couple_id)
+            if not couple or not self.check_couple_access(couple)[0] or self.get_active_session(couple_id):
+                return None
+            sub_until = couple.get("subscription_until")
+            premium = False
+            if sub_until:
+                try:
+                    premium = datetime.fromisoformat(sub_until) > datetime.now(timezone.utc)
+                except Exception:
+                    premium = False
+            session = self.create_conflict_session(couple_id, initiator_id)
+            if not premium:
+                couple["free_sessions_left"] = max(0, couple.get("free_sessions_left", 0) - 1)
+            return session
 
     def update_session_status(
         self,

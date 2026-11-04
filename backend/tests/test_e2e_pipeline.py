@@ -118,7 +118,7 @@ async def test_e2e_pipeline_full_scenario():
     couple = test_repo.create_couple(partner_1_id=201, invite_code="TESTINVITE")
     couple_id = couple["id"]
     test_repo.join_couple(couple_id, partner_2_id=202)
-    assert couple["free_sessions_left"] == 3
+    assert couple["free_sessions_left"] == 2
 
     # 4. Старт ссоры
     session = test_repo.create_conflict_session(couple_id=couple_id, initiator_id=201)
@@ -247,7 +247,7 @@ async def test_stage_3_12_not_applicable_short_circuit():
     couple = test_repo.create_couple(501, "INVPRANK")
     couple_id = couple["id"]
     test_repo.join_couple(couple_id, 502)
-    assert test_repo.get_couple_by_id(couple_id)["free_sessions_left"] == 3
+    assert test_repo.get_couple_by_id(couple_id)["free_sessions_left"] == 2
 
     # 2. Сессия и входные данные (спам / шутка)
     session = test_repo.create_conflict_session(couple_id=couple_id, initiator_id=501)
@@ -278,9 +278,9 @@ async def test_stage_3_12_not_applicable_short_circuit():
         assert "не содержит описания кризисной ситуации" in sent_text
         assert "Бесплатная попытка разбора не списана!" in sent_text
 
-    # 4. Проверка: free_sessions_left НЕ списана (осталось 3)
+    # 4. Проверка: free_sessions_left НЕ списана (осталось 2)
     updated_couple = test_repo.get_couple_by_id(couple_id)
-    assert updated_couple["free_sessions_left"] == 3
+    assert updated_couple["free_sessions_left"] == 2
 
     # 5. Результаты анализа сохранены в БД
     updated_session = test_repo.get_session_by_id(session_id)
