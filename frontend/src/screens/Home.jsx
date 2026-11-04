@@ -29,6 +29,7 @@ export default function Home({ meData, onStartSession, onOpenActiveSession, onRe
   const user = meData?.user || {};
   const couple = meData?.couple || null;
   const activeSession = meData?.active_session || null;
+  const latestCompletedSession = meData?.latest_completed_session || null;
   const subscriptionUntil = meData?.subscription_until || couple?.subscription_until;
   const freeSessionsLeft = couple?.free_sessions_left ?? meData?.free_sessions_left ?? 2;
   const isPremium = Boolean(subscriptionUntil && new Date(subscriptionUntil) > new Date());
@@ -398,6 +399,18 @@ export default function Home({ meData, onStartSession, onOpenActiveSession, onRe
         {/* ЭЛЕМЕНТ 2: Центральная большая кнопка разбора конфликта             */}
         {/* =================================================================== */}
         <div className="pt-2 pb-2">
+          {latestCompletedSession?.id && (
+            <button
+              onClick={() => onOpenActiveSession(latestCompletedSession.id)}
+              className="w-full p-4 mb-3 rounded-2xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-900 text-left flex items-center justify-between gap-3"
+            >
+              <div>
+                <div className="text-sm font-bold text-emerald-800 dark:text-emerald-200">Разбор готов</div>
+                <div className="text-xs text-emerald-700/80 dark:text-emerald-300/80 mt-1">Открыть итог и персональную карточку</div>
+              </div>
+              <ArrowRight size={20} className="shrink-0 text-emerald-700 dark:text-emerald-300" />
+            </button>
+          )}
           {activeSession && activeSession.status !== 'completed' ? (
             /* Кнопка возврата к активному разбору */
             <button

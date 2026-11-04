@@ -67,6 +67,10 @@ def get_active_session(couple_id: str) -> Optional[Dict[str, Any]]:
     return get_repo().get_active_session(couple_id)
 
 
+def get_latest_completed_session(couple_id: str) -> Optional[Dict[str, Any]]:
+    return get_repo().get_latest_completed_session(couple_id)
+
+
 def get_session_by_id(session_id: str) -> Optional[Dict[str, Any]]:
     return get_repo().get_session_by_id(session_id)
 

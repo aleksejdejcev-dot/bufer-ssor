@@ -676,6 +676,7 @@ async def get_my_profile(user: dict = Depends(get_current_user)):
 
     couple_info = None
     active_session_info = None
+    latest_completed_session_info = None
     subscription_until = db.get_subscription_until_for_user(telegram_id)
 
     if couple:
@@ -705,6 +706,14 @@ async def get_my_profile(user: dict = Depends(get_current_user)):
                 "i_submitted": db.has_user_submitted_input(session["id"], telegram_id),
             }
 
+        completed_session = db.get_latest_completed_session(couple["id"])
+        if completed_session:
+            latest_completed_session_info = {
+                "id": completed_session["id"],
+                "status": completed_session["status"],
+                "completed_at": completed_session.get("completed_at"),
+            }
+
     return {
         "user": {
             "telegram_id": user["telegram_id"],
@@ -716,6 +725,7 @@ async def get_my_profile(user: dict = Depends(get_current_user)):
         "free_sessions_left": couple.get("free_sessions_left", 2) if couple else 2,
         "subscription_until": subscription_until or (couple.get("subscription_until") if couple else None),
         "active_session": active_session_info,
+        "latest_completed_session": latest_completed_session_info,
     }
 
 

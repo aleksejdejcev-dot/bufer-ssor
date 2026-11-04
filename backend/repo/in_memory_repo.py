@@ -223,6 +223,17 @@ class InMemoryRepo:
             return active[0]
         return None
 
+    def get_latest_completed_session(self, couple_id: str) -> Optional[Dict[str, Any]]:
+        completed = [
+            s for s in self.conflict_sessions.values()
+            if s.get("couple_id") == couple_id and s.get("status") == "completed"
+        ]
+        if not completed:
+            return None
+        completed.sort(key=lambda s: (s.get("completed_at") or "", s.get("created_at") or ""), reverse=True)
+        session = completed[0]
+        return {key: session.get(key) for key in ("id", "status", "completed_at")}
+
     def get_sessions_for_analysis_recovery(self) -> List[Dict[str, Any]]:
         return [s for s in self.conflict_sessions.values() if s.get("status") == "analyzing"]
 

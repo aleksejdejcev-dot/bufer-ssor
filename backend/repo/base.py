@@ -57,6 +57,10 @@ class Repository(Protocol):
     def get_active_session(self, couple_id: str) -> Optional[Dict[str, Any]]:
         ...
 
+    def get_latest_completed_session(self, couple_id: str) -> Optional[Dict[str, Any]]:
+        """Return the newest result that remains available to the couple."""
+        ...
+
     def get_session_by_id(self, session_id: str) -> Optional[Dict[str, Any]]:
         ...
 

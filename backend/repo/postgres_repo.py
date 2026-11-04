@@ -383,6 +383,21 @@ class PostgresRepo:
                 return _format_row(row)
         return self._run_async(_impl())
 
+    def get_latest_completed_session(self, couple_id: str) -> Optional[Dict[str, Any]]:
+        async def _impl():
+            pool = await self._get_pool()
+            c_uuid = uuid.UUID(couple_id)
+            async with pool.acquire() as conn:
+                row = await conn.fetchrow("""
+                    SELECT id, status, completed_at
+                    FROM conflict_sessions
+                    WHERE couple_id = $1 AND status = 'completed'
+                    ORDER BY completed_at DESC NULLS LAST, created_at DESC
+                    LIMIT 1;
+                """, c_uuid)
+                return _format_row(row)
+        return self._run_async(_impl())
+
     def get_sessions_for_analysis_recovery(self) -> List[Dict[str, Any]]:
         """Return sessions left in the pre-analysis status after a process restart."""
         async def _impl():
