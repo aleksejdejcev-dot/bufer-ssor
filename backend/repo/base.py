@@ -47,6 +47,10 @@ class Repository(Protocol):
     def get_subscription_until_for_user(self, telegram_id: int) -> Optional[str]:
         ...
 
+    def cleanup_expired_subscriptions(self) -> int:
+        """Deletes expired payer entitlements and clears expired legacy couple dates."""
+        ...
+
     def add_free_sessions(self, couple_id: str, count: int) -> Dict[str, Any]:
         ...
 
@@ -133,7 +137,7 @@ class Repository(Protocol):
         ...
 
     def delete_couple_data(self, couple_id: str, initiated_by: Optional[int] = None) -> None:
-        """Полное удаление пары, истории и обоих профилей в users."""
+        """Удаляет пару, её историю и профили; подписку плательщика и платёжный учёт сохраняет."""
         ...
 
     def save_payment(

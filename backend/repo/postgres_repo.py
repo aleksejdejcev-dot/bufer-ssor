@@ -338,6 +338,15 @@ class PostgresRepo:
                 return value.isoformat() if value else None
         return self._run_async(_impl())
 
+    def cleanup_expired_subscriptions(self) -> int:
+        async def _impl():
+            pool = await self._get_pool()
+            async with pool.acquire() as conn:
+                result = await conn.execute("DELETE FROM user_subscriptions WHERE subscription_until <= now();")
+                await conn.execute("UPDATE couples SET subscription_until = NULL WHERE subscription_until <= now();")
+                return int(result.rsplit(" ", 1)[-1])
+        return self._run_async(_impl())
+
     def add_free_sessions(self, couple_id: str, count: int) -> Dict[str, Any]:
         async def _impl():
             pool = await self._get_pool()

@@ -98,8 +98,8 @@ python scripts/list_models.py
 - **Схема интеграции**: Telegram Stars или webhook ЮKassa → проверка подписи/вебхука → генерация псевдонима плательщика `payer_hash` через `HMAC-SHA256(user_id, PAYMENT_HASH_KEY)` → запись в таблицу `payments`.
 - **Поля таблицы `payments`**:
   - `id` (UUID, primary key);
-  - `payer_hash` (TEXT, NOT NULL) — необратимый хэш Telegram ID плательщика;
-  - `couple_id` (UUID, NULLABLE, `ON DELETE SET NULL`) — привязка к паре; при удалении пары или аккаунтов финансовая транзакция сохраняется в обезличенном виде согласно требованиям бухгалтерского и налогового учёта;
+  - `payer_hash` (TEXT, NOT NULL) — псевдонимизированный хэш Telegram ID плательщика; это не полная анонимизация;
+  - `couple_id` (UUID, NULLABLE, `ON DELETE SET NULL`) — привязка к паре; при удалении пары она обнуляется, а запись транзакции остаётся с псевдонимизированным хешем плательщика. Хеш не следует считать полной анонимизацией;
   - `provider` (TEXT: `stars` | `yookassa`);
   - `provider_payment_id` (TEXT, NOT NULL, UNIQUE);
   - `amount` (INTEGER, в копейках / звёздах);

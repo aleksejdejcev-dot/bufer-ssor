@@ -55,6 +55,10 @@ def get_subscription_until_for_user(telegram_id: int) -> Optional[str]:
     return get_repo().get_subscription_until_for_user(telegram_id)
 
 
+def cleanup_expired_subscriptions() -> int:
+    return get_repo().cleanup_expired_subscriptions()
+
+
 def add_free_sessions(couple_id: str, count: int) -> Dict[str, Any]:
     return get_repo().add_free_sessions(couple_id, count)
 

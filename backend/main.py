@@ -710,8 +710,8 @@ async def trigger_retention_purge(
 @app.delete("/couple")
 async def delete_my_couple(user: dict = Depends(require_legal_accepted)):
     """
-    Полное удаление пары, всех связанных сессий, зашифрованных исходников
-    и сброс couple_id у обоих партнеров (через SQL-функцию delete_couple_data).
+    Удаление пары, связанных сессий, исходников и профилей обоих участников.
+    Платёжный учёт и личная подписка плательщика сохраняются отдельно.
     """
     couple = db.get_user_couple(user["telegram_id"])
     if not couple:

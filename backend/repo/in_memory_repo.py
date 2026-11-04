@@ -178,6 +178,33 @@ class InMemoryRepo:
                 continue
         return max(valid, default=(None, None))[1]
 
+    def cleanup_expired_subscriptions(self) -> int:
+        now = datetime.now(timezone.utc)
+        expired = []
+        for payer_hash, value in self.user_subscriptions.items():
+            try:
+                until = datetime.fromisoformat(value)
+                if until.tzinfo is None:
+                    until = until.replace(tzinfo=timezone.utc)
+                if until <= now:
+                    expired.append(payer_hash)
+            except Exception:
+                expired.append(payer_hash)
+        for payer_hash in expired:
+            self.user_subscriptions.pop(payer_hash, None)
+        for couple in self.couples.values():
+            until = couple.get("subscription_until")
+            if until:
+                try:
+                    dt = datetime.fromisoformat(until)
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=timezone.utc)
+                    if dt <= now:
+                        couple["subscription_until"] = None
+                except Exception:
+                    couple["subscription_until"] = None
+        return len(expired)
+
     def add_free_sessions(self, couple_id: str, count: int) -> Dict[str, Any]:
         c = self.couples.get(couple_id)
         if c:
@@ -403,7 +430,7 @@ class InMemoryRepo:
         return {"purged_sessions": purged_sessions, "purged_inputs": purged_inputs}
 
     def delete_couple_data(self, couple_id: str, initiated_by: Optional[int] = None) -> None:
-        """Полное удаление пары, истории и обоих профилей в users."""
+        """Удаляет пару, её историю и профили; подписку плательщика и платёжный учёт сохраняет."""
         c_hash = self._hash_id(couple_id)
         u_hash = self._hash_id(initiated_by) if initiated_by else "unknown"
         self.deletions_log.append({
