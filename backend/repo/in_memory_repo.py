@@ -744,7 +744,11 @@ class InMemoryRepo:
         return purged
 
     def cleanup_expired_payments(self, retention_years: int) -> int:
-        cutoff = datetime.now(timezone.utc) - timedelta(days=365 * retention_years)
+        now = datetime.now(timezone.utc)
+        try:
+            cutoff = now.replace(year=now.year - retention_years)
+        except ValueError:  # Feb 29 in a leap year -> Feb 28 in the target year.
+            cutoff = now.replace(year=now.year - retention_years, day=28)
         purged = 0
         to_delete = []
         for p_id, p in self.payments.items():

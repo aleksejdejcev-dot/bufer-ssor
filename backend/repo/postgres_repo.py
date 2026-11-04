@@ -1066,7 +1066,11 @@ class PostgresRepo:
     def cleanup_expired_payments(self, retention_years: int) -> int:
         async def _impl():
             pool = await self._get_pool()
-            cutoff = datetime.now(timezone.utc) - timedelta(days=365 * retention_years)
+            now = datetime.now(timezone.utc)
+            try:
+                cutoff = now.replace(year=now.year - retention_years)
+            except ValueError:  # Feb 29 in a leap year -> Feb 28 in the target year.
+                cutoff = now.replace(year=now.year - retention_years, day=28)
             async with pool.acquire() as conn:
                 res = await conn.execute("DELETE FROM payments WHERE created_at <= $1;", cutoff)
                 count = int(res.split()[1]) if len(res.split()) > 1 else 0

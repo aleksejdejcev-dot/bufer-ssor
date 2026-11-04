@@ -95,7 +95,7 @@ class Settings(BaseSettings):
     EXPIRATION_HOURS: int = 48
     RAW_INPUT_TTL_HOURS: int = 48
     RESULTS_RETENTION_DAYS: int = 2
-    PAYMENT_RETENTION_YEARS: Optional[int] = None
+    PAYMENT_RETENTION_YEARS: Optional[int] = 4
 
     # Настройки сервера
     HOST: str = "0.0.0.0"
