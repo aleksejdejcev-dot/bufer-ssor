@@ -79,15 +79,20 @@ class GigaChatProvider(LLMProvider):
         if not self.insecure and self.ca_bundle:
             ca_path = Path(self.ca_bundle)
             if not ca_path.is_absolute():
-                # Ищем относительно корня проекта
+                # Поддерживаем путь относительно корня репозитория и backend.
+                # В контейнере рабочая директория — /app/backend, а настройки
+                # могут содержать backend/certs/... (путь от корня репозитория).
                 proj_root = Path(__file__).resolve().parent.parent
-                cand = proj_root / self.ca_bundle
-                if cand.exists():
-                    self._effective_ca = str(cand)
-                elif ca_path.exists():
-                    self._effective_ca = str(ca_path)
+                candidates = (
+                    proj_root / ca_path,
+                    proj_root / "certs" / ca_path.name,
+                    ca_path,
+                )
+                resolved_ca = next((candidate for candidate in candidates if candidate.is_file()), None)
+                if resolved_ca:
+                    self._effective_ca = str(resolved_ca.resolve())
             elif ca_path.exists():
-                self._effective_ca = str(ca_path)
+                self._effective_ca = str(ca_path.resolve())
 
         self._verified_models: Optional[List[str]] = None
 
