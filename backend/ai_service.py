@@ -732,6 +732,7 @@ async def generate_shared_summary_with_ladder(
     model: Optional[str] = None,
     tracker: Optional[Dict[str, Any]] = None,
     client: Optional[Any] = None,
+    guidance: Optional[str] = None,
 ) -> SharedSummary:
     """Генерация общего итога пары по Лестнице фоллбэков."""
     p = _resolve_provider(provider_or_client or client, role="shared_writer", model=model)
@@ -741,7 +742,7 @@ async def generate_shared_summary_with_ladder(
             neutral_topic=None, ritual_ideas=[], agreed_ritual=None,
         )
 
-    contents = prepare_shared_writer_contents(shared_analysis)
+    contents = prepare_shared_writer_contents(shared_analysis, guidance=guidance)
     shared_card, meta = await call_shared_writer(p, contents, model=model, tracker=tracker)
 
     is_blocked = meta.get("blocked", False)
@@ -758,12 +759,14 @@ async def generate_shared_summary_with_ladder(
         if not errors and shared_card is not None:
             break
         logger.warning("[shared] Shared validation errors (retry %d/%d): %s", retry_idx, max_retries, errors)
-        guidance = (
+        retry_guidance = (
             f"В прошлой попытке общий итог не прошёл валидацию: {'; '.join(errors)}. "
             "Убедись, что situation_overview и shared_advice содержат не менее 2 предложений каждое, "
             "используются исключительно местоимения 'вы'/'вам'/'вас', нет слов 'один', 'другой', 'ты', 'чай'."
         )
-        retry_contents = prepare_shared_writer_contents(shared_analysis, guidance=guidance)
+        if guidance:
+            retry_guidance = f"{guidance}\n\n{retry_guidance}"
+        retry_contents = prepare_shared_writer_contents(shared_analysis, guidance=retry_guidance)
         shared_card, meta = await call_shared_writer(p, retry_contents, model=model, tracker=tracker)
         if shared_card is not None and not meta.get("blocked"):
             shared_card = sanitize_shared_minor_banned_words(shared_card)
@@ -1295,9 +1298,6 @@ async def analyze_session(session_id: str) -> None:
                 shared_card = await generate_shared_summary_with_ladder(
                     provider_or_client=provider,
                     shared_analysis=analyzer_res.shared,
-                    partner_1_topic=analyzer_res.partner_1.topic,
-                    partner_2_topic=analyzer_res.partner_2.topic,
-                    risk_elevated=is_elevated,
                     guidance="ВНИМАНИЕ: В общем итоге обнаружены приватные факты партнеров. Сформулируй строго нейтрально.",
                     tracker=tracker,
                     fallback_records=fallback_records,
