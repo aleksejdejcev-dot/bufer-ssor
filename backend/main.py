@@ -39,6 +39,7 @@ from retention_scheduler import retention_worker_loop
 from bot import (
     bot,
     dp,
+    analyze_session,
     setup_bot_commands,
     notify_initiator_prompt,
     send_white_flag,
@@ -186,6 +187,26 @@ async def lifespan(app: FastAPI):
         )
     )
 
+    async def recover_interrupted_analyses():
+        repo = get_repo()
+        try:
+            sessions = repo.get_sessions_for_analysis_recovery()
+            recoverable = [
+                session["id"]
+                for session in sessions
+                if repo.count_pending_inputs(session["id"]) >= 2
+            ]
+            if recoverable:
+                logger.warning("Recovering %s interrupted conflict analyses", len(recoverable))
+                await asyncio.gather(
+                    *(analyze_session(session_id) for session_id in recoverable),
+                    return_exceptions=True,
+                )
+        except Exception:
+            logger.exception("Failed to recover interrupted conflict analyses")
+
+    analysis_recovery_task = asyncio.create_task(recover_interrupted_analyses())
+
     # 2. Запускаем автономный фоновый Long Polling воркер Telegram
     polling_task = asyncio.create_task(_telegram_startup_worker())
 
@@ -199,11 +220,14 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.debug("dp.stop_polling exception on shutdown: %s", e)
 
-    for task in (polling_task, retention_task):
+    for task in (polling_task, retention_task, analysis_recovery_task):
         task.cancel()
     try:
         await asyncio.wait_for(
-            asyncio.gather(polling_task, retention_task, return_exceptions=True), timeout=15.0
+            asyncio.gather(
+                polling_task, retention_task, analysis_recovery_task, return_exceptions=True
+            ),
+            timeout=15.0,
         )
     except asyncio.TimeoutError:
         logger.error("Background tasks did not stop within shutdown timeout")

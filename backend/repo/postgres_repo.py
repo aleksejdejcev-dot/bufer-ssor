@@ -383,6 +383,15 @@ class PostgresRepo:
                 return _format_row(row)
         return self._run_async(_impl())
 
+    def get_sessions_for_analysis_recovery(self) -> List[Dict[str, Any]]:
+        """Return sessions left in the pre-analysis status after a process restart."""
+        async def _impl():
+            pool = await self._get_pool()
+            async with pool.acquire() as conn:
+                rows = await conn.fetch("SELECT * FROM conflict_sessions WHERE status = 'analyzing';")
+                return _format_rows(rows)
+        return self._run_async(_impl())
+
     def get_session_by_id(self, session_id: str) -> Optional[Dict[str, Any]]:
         async def _impl():
             pool = await self._get_pool()
@@ -501,7 +510,7 @@ class PostgresRepo:
                 row = await conn.fetchrow("""
                     UPDATE conflict_sessions
                     SET status = 'processing'
-                    WHERE id = $1 AND status NOT IN ('processing', 'analyzing', 'completed', 'failed', 'expired', 'purged_by_retention')
+                    WHERE id = $1 AND status NOT IN ('processing', 'completed', 'failed', 'expired', 'purged_by_retention')
                     RETURNING id;
                 """, s_uuid)
                 return row is not None

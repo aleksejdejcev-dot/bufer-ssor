@@ -220,7 +220,7 @@ export default function Session({ sessionId, onBack }) {
         {/* =================================================================== */}
         {/* СТАТУС 2: ИИ анализирует ситуацию (analyzing)                       */}
         {/* =================================================================== */}
-        {status === 'analyzing' && (
+        {['analyzing', 'processing'].includes(status) && (
           <div className="bg-white dark:bg-zinc-900 rounded-2xl p-6 border border-slate-200/70 dark:border-zinc-800 shadow-sm text-center space-y-4 my-6 animate-fade-in">
             <div className="w-14 h-14 mx-auto rounded-2xl bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 flex items-center justify-center border border-indigo-100 dark:border-indigo-900/40">
               <Sparkles size={28} className="animate-pulse" />

@@ -216,12 +216,15 @@ class InMemoryRepo:
     def get_active_session(self, couple_id: str) -> Optional[Dict[str, Any]]:
         active = [
             s for s in self.conflict_sessions.values()
-            if s.get("couple_id") == couple_id and s.get("status") in ("waiting_partner_2", "analyzing")
+            if s.get("couple_id") == couple_id and s.get("status") in ("waiting_partner_2", "analyzing", "processing")
         ]
         if active:
             active.sort(key=lambda x: x.get("created_at", ""), reverse=True)
             return active[0]
         return None
+
+    def get_sessions_for_analysis_recovery(self) -> List[Dict[str, Any]]:
+        return [s for s in self.conflict_sessions.values() if s.get("status") == "analyzing"]
 
     def get_session_by_id(self, session_id: str) -> Optional[Dict[str, Any]]:
         return self.conflict_sessions.get(session_id)
@@ -267,13 +270,14 @@ class InMemoryRepo:
                 s["risk_level"] = risk_level
 
     def claim_session_for_analysis(self, session_id: str) -> bool:
-        s = self.conflict_sessions.get(session_id)
-        if not s:
-            return False
-        if s.get("status") in ("processing", "analyzing", "completed", "failed", "expired", "purged_by_retention"):
-            return False
-        s["status"] = "processing"
-        return True
+        with self._session_lock:
+            s = self.conflict_sessions.get(session_id)
+            if not s:
+                return False
+            if s.get("status") in ("processing", "completed", "failed", "expired", "purged_by_retention"):
+                return False
+            s["status"] = "processing"
+            return True
 
     def save_analysis_results(
         self,
