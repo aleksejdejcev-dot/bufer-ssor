@@ -55,7 +55,8 @@ export default function App() {
       const data = await api.getMe();
       setMeData(data);
 
-      const hasAcceptedLegal = Boolean(data.user?.accepted_legal_at) || localStorage.getItem('accepted_legal') === 'true';
+      // Server is authoritative: the local cache can outlive a deleted/recreated user profile.
+      const hasAcceptedLegal = Boolean(data.user?.accepted_legal_at);
 
       if (!hasAcceptedLegal) {
         setCurrentScreen('onboarding');
@@ -129,11 +130,6 @@ export default function App() {
   }
 
   const handleLegalAccepted = async (legalRes) => {
-    try {
-      localStorage.setItem('accepted_legal', 'true');
-    } catch (e) {
-      console.warn('localStorage error:', e);
-    }
     // Мгновенно обновляем стейт и переключаем экран на главную страницу
     setMeData((prev) => ({
       ...prev,

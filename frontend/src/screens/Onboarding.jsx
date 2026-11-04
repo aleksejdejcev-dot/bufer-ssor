@@ -58,16 +58,6 @@ export default function Onboarding({ onAccepted, initialCouple }) {
       WebApp.HapticFeedback?.impactOccurred('medium');
       const res = await api.acceptLegal(true, true);
 
-      // 1. Сохраняем отметку о принятии условий в localStorage
-      try {
-        localStorage.setItem('accepted_legal', 'true');
-        if (res?.accepted_legal_at) {
-          localStorage.setItem('accepted_legal_at', res.accepted_legal_at);
-        }
-      } catch (storageErr) {
-        console.warn('Failed to save accepted_legal to localStorage:', storageErr);
-      }
-
       WebApp.HapticFeedback?.notificationOccurred('success');
 
       // 2. Передаем управление родительскому роутеру для перехода на следующий шаг
