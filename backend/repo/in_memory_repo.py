@@ -23,7 +23,7 @@ class InMemoryRepo:
         self.rate_limiter = RateLimiter()
         self.advisory_locks: set[int] = set()
         self.deletions_log: List[Dict[str, Any]] = []
-        self.conflict_result_seen: Dict[str, set[int]] = {}
+        self.conflict_finish_confirmations: Dict[str, set[int]] = {}
 
     def reset_state(self) -> None:
         self.users.clear()
@@ -35,7 +35,7 @@ class InMemoryRepo:
         self.rate_limiter = RateLimiter()
         self.advisory_locks.clear()
         self.deletions_log.clear()
-        self.conflict_result_seen.clear()
+        self.conflict_finish_confirmations.clear()
         self.payments.clear()
         self.rate_limiter.clear()
 
@@ -303,27 +303,24 @@ class InMemoryRepo:
         # Удаление pending_inputs
         self.delete_pending_inputs_for_session(session_id)
 
-    def delete_analysis_results(self, session_id: str) -> None:
-        session = self.conflict_sessions.get(session_id)
-        if session:
-            session["ai_advice_p1"] = None
-            session["ai_advice_p2"] = None
-            session["shared_summary"] = None
-            session["status"] = "purged_by_retention"
-
-    def mark_conflict_result_seen(self, session_id: str, telegram_id: int) -> bool:
+    def confirm_conflict_finished(self, session_id: str, telegram_id: int) -> bool:
         session = self.conflict_sessions.get(session_id)
         if not session:
             return False
         couple = self.couples.get(session.get("couple_id"))
         if not couple:
             return False
-        seen = self.conflict_result_seen.setdefault(session_id, set())
-        seen.add(telegram_id)
+        confirmed = self.conflict_finish_confirmations.setdefault(session_id, set())
+        confirmed.add(telegram_id)
+        session["finish_confirmed_by_p1"] = couple.get("partner_1_id") in confirmed
+        session["finish_confirmed_by_p2"] = bool(couple.get("partner_2_id") and couple.get("partner_2_id") in confirmed)
         participants = {x for x in (couple.get("partner_1_id"), couple.get("partner_2_id")) if x}
-        if participants and participants.issubset(seen):
-            self.delete_analysis_results(session_id)
-        return True
+        if participants and participants.issubset(confirmed):
+            self.delete_pending_inputs_for_session(session_id)
+            self.conflict_sessions.pop(session_id, None)
+            self.conflict_finish_confirmations.pop(session_id, None)
+            return True
+        return False
 
     def get_expired_sessions(self) -> List[Dict[str, Any]]:
         cutoff = (datetime.now(timezone.utc) - timedelta(hours=settings.EXPIRATION_HOURS)).isoformat()
@@ -333,9 +330,9 @@ class InMemoryRepo:
         ]
 
     def expire_session(self, session_id: str) -> None:
-        now_iso = datetime.now(timezone.utc).isoformat()
-        self.update_session_status(session_id, status="expired", completed_at=now_iso)
         self.delete_pending_inputs_for_session(session_id)
+        self.conflict_sessions.pop(session_id, None)
+        self.conflict_finish_confirmations.pop(session_id, None)
 
     def save_pending_input(
         self,
@@ -426,24 +423,27 @@ class InMemoryRepo:
             couple["mood_updated_at_p1"] = None
             couple["mood_updated_at_p2"] = None
 
-    def purge_expired_data(self, days_retention: int = 0, hours_raw_ttl: int = 48) -> Dict[str, int]:
+    def purge_expired_data(self, days_retention: int = 2, hours_raw_ttl: int = 48) -> Dict[str, int]:
         now = datetime.now(timezone.utc)
         sess_cutoff = (now - timedelta(days=days_retention)).isoformat()
         inp_cutoff = (now - timedelta(hours=hours_raw_ttl)).isoformat()
 
         purged_sessions = 0
-        for s in self.conflict_sessions.values():
+        expired_session_ids = []
+        for session_id, s in list(self.conflict_sessions.items()):
             if s.get("status") == "completed":
                 c_at = s.get("completed_at") or ""
-                seen = self.conflict_result_seen.get(s.get("id"), set())
+                confirmed = self.conflict_finish_confirmations.get(session_id, set())
                 couple = self.couples.get(s.get("couple_id"), {})
                 participants = {x for x in (couple.get("partner_1_id"), couple.get("partner_2_id")) if x}
-                if (participants and participants.issubset(seen)) or days_retention <= 0 or (c_at and c_at <= sess_cutoff):
-                    s["ai_advice_p1"] = None
-                    s["ai_advice_p2"] = None
-                    s["shared_summary"] = None
-                    s["status"] = "purged_by_retention"
-                    purged_sessions += 1
+                if (participants and participants.issubset(confirmed)) or (c_at and c_at <= sess_cutoff):
+                    expired_session_ids.append(session_id)
+
+        for session_id in expired_session_ids:
+            self.delete_pending_inputs_for_session(session_id)
+            self.conflict_sessions.pop(session_id, None)
+            self.conflict_finish_confirmations.pop(session_id, None)
+            purged_sessions += 1
 
         purged_inputs = 0
         for pid in list(self.pending_inputs.keys()):

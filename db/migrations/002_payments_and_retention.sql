@@ -34,7 +34,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_payments_provider_charge_id ON payments (p
 -- 2. Хранимая функция: purge_expired_data(days_retention INT, hours_raw_ttl INT)
 -- ==============================================================================
 CREATE OR REPLACE FUNCTION purge_expired_data(
-    days_retention integer DEFAULT 0,
+    days_retention integer DEFAULT 2,
     hours_raw_ttl integer DEFAULT 48
 )
 RETURNS jsonb
@@ -50,20 +50,11 @@ BEGIN
     sessions_cutoff := now() - (GREATEST(days_retention, 0) || ' days')::interval;
     inputs_cutoff := now() - (hours_raw_ttl || ' hours')::interval;
 
-    -- 1. Очистка результатов completed-сессий по заданному сроку (0 означает сразу)
-    UPDATE conflict_sessions
-    SET
-        ai_advice_p1 = NULL,
-        ai_advice_p2 = NULL,
-        shared_summary = NULL,
-        status = 'purged_by_retention'
+    -- 1. Удаление конфликтов, не подтверждённых обоими участниками за срок retention.
+    DELETE FROM conflict_sessions
     WHERE status = 'completed'
       AND completed_at IS NOT NULL
-      AND (
-          (result_seen_by_p1 AND result_seen_by_p2)
-          OR days_retention <= 0
-          OR (days_retention > 0 AND completed_at <= sessions_cutoff)
-      );
+      AND completed_at <= sessions_cutoff;
 
     GET DIAGNOSTICS purged_sessions_count = ROW_COUNT;
 

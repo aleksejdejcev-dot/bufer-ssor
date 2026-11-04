@@ -87,17 +87,13 @@ class Repository(Protocol):
         completed_at: str,
     ) -> None:
         """
-        Временная запись результатов анализа до просмотра обоими участниками,
-        фиксация статуса/времени завершения и удаление pending_inputs.
+        Временная запись результатов до взаимного подтверждения завершения;
+        исходники удаляются после анализа, а карточки — по подтверждению или TTL.
         """
         ...
 
-    def delete_analysis_results(self, session_id: str) -> None:
-        """Удаляет карточки и общий результат после их выдачи участникам."""
-        ...
-
-    def mark_conflict_result_seen(self, session_id: str, telegram_id: int) -> bool:
-        """Records participant's receipt; deletes result after both participants received it."""
+    def confirm_conflict_finished(self, session_id: str, telegram_id: int) -> bool:
+        """Records participant confirmation and deletes results after both confirm."""
         ...
 
     def get_expired_sessions(self) -> List[Dict[str, Any]]:
@@ -137,7 +133,7 @@ class Repository(Protocol):
         """Удаляет только сессии и историю ссоры пары, профили и подписка остаются."""
         ...
 
-    def purge_expired_data(self, days_retention: int = 0, hours_raw_ttl: int = 48) -> Dict[str, int]:
+    def purge_expired_data(self, days_retention: int = 2, hours_raw_ttl: int = 48) -> Dict[str, int]:
         """
         Очистка завершенных сессий по настроенному сроку и удаление зависших сырых данных pending_inputs.
         """

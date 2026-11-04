@@ -159,8 +159,8 @@ export const api = {
     return request(`/conflict/${sessionId}`, { method: 'GET' });
   },
 
-  async markConflictResultSeen(sessionId) {
-    return request(`/conflict/${sessionId}/result-seen`, { method: 'POST' });
+  async confirmConflictFinished(sessionId) {
+    return request(`/conflict/${sessionId}/finish`, { method: 'POST' });
   },
 
   /**

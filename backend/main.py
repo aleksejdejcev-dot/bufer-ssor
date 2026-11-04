@@ -872,12 +872,11 @@ async def get_conflict_session(
     if status_val == "purged_by_retention":
         return {
             "id": session["id"],
-            "status": "completed",
+            "status": "finished" if session.get("finish_confirmed_by_p1") and session.get("finish_confirmed_by_p2") else "expired",
             "risk_level": session.get("risk_level"),
             "created_at": session["created_at"],
             "completed_at": session.get("completed_at"),
-            "personal_advice": None,
-            "shared_summary": None,
+            "result_expired": True,
         }
 
     if status_val != "completed":
@@ -888,13 +887,6 @@ async def get_conflict_session(
             "created_at": session["created_at"],
             "completed_at": session.get("completed_at"),
         }
-
-    # После того как оба участника получили результат, его содержимое удаляется.
-    if not (session.get("ai_advice_p1") or session.get("ai_advice_p2") or session.get("shared_summary")):
-        raise HTTPException(
-            status_code=status.HTTP_410_GONE,
-            detail="Результат разбора уже удалён после завершения. Данные пары и исходные сообщения не сохраняются.",
-        )
 
     # Сессия completed: формируем строго персональную карточку
     is_partner_1 = (telegram_id == couple["partner_1_id"])
@@ -908,24 +900,26 @@ async def get_conflict_session(
         "completed_at": session.get("completed_at"),
         "personal_advice": my_advice,
         "shared_summary": session.get("shared_summary"),
+        "finish_confirmed_by_me": session.get("finish_confirmed_by_p1" if is_partner_1 else "finish_confirmed_by_p2", False),
+        "partner_finished": session.get("finish_confirmed_by_p2" if is_partner_1 else "finish_confirmed_by_p1", False),
         "script_hints": get_script_hints(),
     }
 
 
-@app.post("/conflict/{session_id}/result-seen")
-async def mark_conflict_result_seen(
+@app.post("/conflict/{session_id}/finish")
+async def confirm_conflict_finished(
     session_id: str,
     user: dict = Depends(require_legal_accepted),
 ):
-    """Marks that a participant received the result and clears it after both did."""
+    """Ends the conflict and permanently deletes it after both partners confirm."""
     session = db.get_session_by_id(session_id)
     if not session:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Сессия не найдена")
     couple = db.get_couple_by_id(session["couple_id"])
     if not couple or user["telegram_id"] not in (couple["partner_1_id"], couple.get("partner_2_id")):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Доступ к этой сессии запрещен")
-    db.mark_conflict_result_seen(session_id, user["telegram_id"])
-    return {"status": "ok"}
+    finished = db.confirm_conflict_finished(session_id, user["telegram_id"])
+    return {"status": "finished" if finished else "waiting_partner", "finished": finished}
 
 
 # ==============================================================================

@@ -22,7 +22,7 @@ def clean_pending_inputs(repo: Repository) -> int:
     return count
 
 
-def clean_completed_sessions(repo: Repository, results_retention_days: int = 0) -> int:
+def clean_completed_sessions(repo: Repository, results_retention_days: int = 2) -> int:
     """Обнуляет результаты завершенных сессий; срок 0 очищает их при первом цикле."""
     res = repo.purge_expired_data(days_retention=results_retention_days)
     purged_sessions = res.get("purged_sessions", 0)
@@ -81,7 +81,7 @@ def clean_waiting_sessions(repo: Repository) -> int:
 
 def run_retention_cycle(
     repo: Repository,
-    results_retention_days: int = 0,
+    results_retention_days: int = 2,
     payment_retention_years: Optional[int] = None,
     invite_ttl_hours: int = 48,
     rate_limit_max_age_seconds: int = 3600,
@@ -121,7 +121,7 @@ def run_retention_cycle(
 async def retention_worker_loop(
     repo: Repository,
     interval_seconds: int = 3600,
-    results_retention_days: int = 0,
+    results_retention_days: int = 2,
     payment_retention_years: Optional[int] = None,
 ):
     """Фоновый цикл asyncio для запуска в lifespan FastAPI."""

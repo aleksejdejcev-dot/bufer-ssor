@@ -101,12 +101,8 @@ def save_analysis_results(
     return get_repo().save_analysis_results(session_id, results, risk_level, completed_at)
 
 
-def delete_analysis_results(session_id: str) -> None:
-    return get_repo().delete_analysis_results(session_id)
-
-
-def mark_conflict_result_seen(session_id: str, telegram_id: int) -> bool:
-    return get_repo().mark_conflict_result_seen(session_id, telegram_id)
+def confirm_conflict_finished(session_id: str, telegram_id: int) -> bool:
+    return get_repo().confirm_conflict_finished(session_id, telegram_id)
 
 
 def get_expired_sessions() -> List[Dict[str, Any]]:
@@ -154,7 +150,7 @@ def delete_history(couple_id: str, initiated_by: Optional[int] = None) -> None:
     return get_repo().delete_history(couple_id, initiated_by=initiated_by)
 
 
-def purge_expired_data(days_retention: int = 0, hours_raw_ttl: int = 48) -> Dict[str, int]:
+def purge_expired_data(days_retention: int = 2, hours_raw_ttl: int = 48) -> Dict[str, int]:
     return get_repo().purge_expired_data(days_retention=days_retention, hours_raw_ttl=hours_raw_ttl)
 
 

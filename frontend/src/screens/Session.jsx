@@ -23,6 +23,8 @@ export default function Session({ sessionId, onBack }) {
   const [session, setSession] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState(null);
+  const [isFinishing, setIsFinishing] = useState(false);
+  const [finishError, setFinishError] = useState(null);
   const pollerRef = useRef(null);
 
   // Нативная кнопка BackButton Telegram
@@ -52,27 +54,22 @@ export default function Session({ sessionId, onBack }) {
       setSession(data);
       setErrorMsg(null);
 
-      if (data.status === 'completed' && (data.personal_advice || data.shared_summary)) {
-        api.markConflictResultSeen(sessionId).catch((err) => {
-          console.warn('Could not mark conflict result as seen:', err);
-        });
+      if (data.status === 'completed') {
+        try {
+          WebApp.HapticFeedback?.notificationOccurred('success');
+        } catch {}
       }
 
-      // Если статус финальный — останавливаем поллинг
-      if (['completed', 'failed', 'expired'].includes(data.status)) {
+      // Продолжаем опрашивать completed-сессию, пока оба не завершат конфликт.
+      if (['failed', 'expired', 'finished'].includes(data.status)) {
         if (pollerRef.current) {
           clearInterval(pollerRef.current);
           pollerRef.current = null;
         }
-        if (data.status === 'completed') {
-          try {
-            WebApp.HapticFeedback?.notificationOccurred('success');
-          } catch {}
-        }
       }
     } catch (err) {
-      if (err?.status === 410) {
-        setSession({ status: 'completed', personal_advice: null, shared_summary: null });
+      if (err?.status === 404 || err?.status === 410) {
+        setSession({ status: 'finished', personal_advice: null, shared_summary: null });
         setErrorMsg(null);
         if (pollerRef.current) {
           clearInterval(pollerRef.current);
@@ -125,6 +122,23 @@ export default function Session({ sessionId, onBack }) {
   const riskLevel = session?.risk_level || 'none';
   const personalAdvice = session?.personal_advice || {};
   const sharedSummary = session?.shared_summary || {};
+
+  const handleFinishConflict = async () => {
+    setIsFinishing(true);
+    setFinishError(null);
+    try {
+      const result = await api.confirmConflictFinished(sessionId);
+      if (result.finished) {
+        setSession({ status: 'finished', personal_advice: null, shared_summary: null });
+      } else {
+        setSession((current) => ({ ...current, finish_confirmed_by_me: true }));
+      }
+    } catch (err) {
+      setFinishError(err.message || 'Не удалось подтвердить завершение');
+    } finally {
+      setIsFinishing(false);
+    }
+  };
 
   return (
     <div className="min-h-screen flex flex-col justify-between p-4 sm:p-5 max-w-md mx-auto animate-fade-in bg-slate-50/50 dark:bg-zinc-950">
@@ -230,6 +244,12 @@ export default function Session({ sessionId, onBack }) {
         {/* =================================================================== */}
         {/* СТАТУСЫ ОШИБОК / ТАЙМАУТА: failed или expired                       */}
         {/* =================================================================== */}
+        {status === 'finished' && (
+          <div className="my-6 p-5 rounded-2xl bg-emerald-50 dark:bg-emerald-950/30 text-center text-emerald-800 dark:text-emerald-200">
+            Карточка больше недоступна: данные конфликта удалены после взаимного подтверждения или по истечении 48 часов.
+          </div>
+        )}
+
         {(status === 'failed' || status === 'expired') && (
           <div className="bg-white dark:bg-zinc-900 rounded-2xl p-6 border border-slate-200/70 dark:border-zinc-800 shadow-sm text-center space-y-4 my-6 animate-fade-in">
             <div className="w-14 h-14 mx-auto rounded-2xl bg-rose-50 dark:bg-rose-950/60 text-rose-600 dark:text-rose-400 flex items-center justify-center border border-rose-100 dark:border-rose-900/40">
@@ -241,7 +261,9 @@ export default function Session({ sessionId, onBack }) {
               </h2>
               <p className="mt-2 text-xs sm:text-sm text-slate-500 dark:text-slate-400 leading-relaxed max-w-xs mx-auto">
                 {status === 'expired'
-                  ? 'Партнёр не успел ответить в течение 48 часов. Срок действия сессии завершился.'
+                  ? (session?.result_expired
+                    ? 'Конфликт не был завершён обоими партнёрами за 48 часов. Карточки и данные конфликта удалены.'
+                    : 'Партнёр не успел ответить в течение 48 часов. Срок действия сессии завершился.')
                   : 'Для полноценного анализа нужны ответы обоих партнёров. Бесплатный разбор не списан.'}
               </p>
             </div>
@@ -268,9 +290,18 @@ export default function Session({ sessionId, onBack }) {
               <span>Ваш персональный разбор готов</span>
             </div>
 
-            {!session?.personal_advice && !session?.shared_summary && (
-              <div className="p-4 rounded-xl bg-slate-50 dark:bg-zinc-900 text-slate-600 dark:text-slate-300 text-sm border border-slate-200 dark:border-zinc-800">
-                Результат был показан после разбора и сразу удалён из базы. Тексты конфликта и карточки не хранятся.
+            {session?.finish_confirmed_by_me ? (
+              <div className="p-3 rounded-xl bg-indigo-50 dark:bg-indigo-950/30 text-indigo-700 dark:text-indigo-300 text-sm">
+                Вы подтвердили завершение. Данные удалятся, когда партнёр тоже подтвердит.
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {finishError && <p className="text-xs text-rose-600">{finishError}</p>}
+                <button type="button" disabled={isFinishing} onClick={handleFinishConflict}
+                  className="w-full py-3 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white text-sm font-semibold">
+                  {isFinishing ? 'Сохраняем...' : 'Завершить конфликт'}
+                </button>
+                <p className="text-center text-[11px] text-slate-500">После подтверждения обоими партнёрами карточки и данные конфликта удалятся.</p>
               </div>
             )}
 

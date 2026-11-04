@@ -65,7 +65,7 @@ class Settings(BaseSettings):
     # Окружение (production | development)
     ENVIRONMENT: str = "production"
     ENABLE_DEV_TOOLS: bool = False
-    RETENTION_INTERVAL_SECONDS: int = 3600
+    RETENTION_INTERVAL_SECONDS: int = 60
 
     # Криптография (Fernet 32-байтный base64 ключ)
     INPUT_ENCRYPTION_KEY: str = ""
@@ -94,7 +94,7 @@ class Settings(BaseSettings):
     # Сроки хранения данных
     EXPIRATION_HOURS: int = 48
     RAW_INPUT_TTL_HOURS: int = 48
-    RESULTS_RETENTION_DAYS: int = 0
+    RESULTS_RETENTION_DAYS: int = 2
     PAYMENT_RETENTION_YEARS: Optional[int] = None
 
     # Настройки сервера
