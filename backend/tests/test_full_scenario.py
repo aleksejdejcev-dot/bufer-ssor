@@ -37,7 +37,6 @@ os.environ["DATABASE_URL"] = "postgresql://buffer_admin:test_password@127.0.0.1:
 os.environ["TELEGRAM_BOT_TOKEN"] = TEST_BOT_TOKEN
 os.environ["TELEGRAM_WEBHOOK_SECRET"] = TEST_WEBHOOK_SECRET
 os.environ["WEBHOOK_BASE_URL"] = "https://test.ngrok.app"
-os.environ["GEMINI_MODEL"] = "gemini-3.8-flash"
 
 import crypto
 from config import settings

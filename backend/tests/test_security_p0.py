@@ -23,7 +23,6 @@ async def test_dev_endpoints_absent_in_production():
         assert r_health.status_code == 200
         data = r_health.json()
         assert data == {"status": "ok", "llm_provider": data.get("llm_provider")}
-        assert "gemini_model" not in data
         assert "gigachat_model" not in data
         assert "timestamp" not in data
 

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Скрипт прогона тестовых синтетических кейсов ссор (Этап 3.5: GigaChat / Gemini).
+Скрипт прогона тестовых синтетических кейсов ссор через GigaChat.
 Выполняет полный пайплайн с:
-- Поддержкой провайдеров (--provider gigachat|gemini) и моделей (--model).
+- Выбором модели (--model).
 - Сохранением результатов в tests/out_<provider>_<model>_<дата>.json.
 - Режимом сравнения двух файлов метрик (--compare file1 file2).
 - Приоритетным порядком кейсов (сначала 7, 8, 6, 3, затем остальные).
@@ -1044,16 +1044,15 @@ def dry_validate(file_path: Path) -> Tuple[Dict[str, Any], List[str]]:
 
 
 async def main():
-    parser = argparse.ArgumentParser(description="Запуск прогона синтетических ссор (Этап 3.5: GigaChat / Gemini)")
-    parser.add_argument("--provider", type=str, default=None, help="LLM-провайдер: gigachat | gemini (по умолчанию из .env)")
-    parser.add_argument("--model", type=str, default=None, help="Модель LLM (например GigaChat-3-Ultra, GigaChat-Pro, gemini-2.5-flash)")
+    parser = argparse.ArgumentParser(description="Запуск прогона синтетических ссор через GigaChat")
+    parser.add_argument("--model", type=str, default=None, help="Модель GigaChat, например GigaChat-3-Ultra")
     parser.add_argument("--limit", type=int, default=None, help="Ограничить количество кейсов")
     parser.add_argument("--cases", type=str, default=None, help="Выборочные кейсы через запятую, например '7,8,6,3'")
     parser.add_argument("--runs", type=int, default=1, help="Количество повторных прогонов каждого кейса (по умолчанию 1)")
     parser.add_argument("--resume", action="store_true", help="Пропустить уже посчитанные кейсы")
     parser.add_argument("--sleep", type=float, default=0.0, help="Пауза между кейсами в секундах")
     parser.add_argument("--no-cache", action="store_true", help="Не использовать кэш Шага A")
-    parser.add_argument("--compare", nargs="*", default=None, help="Сравнение файлов: --compare file1.json file2.json (или сохранить out_<provider>_<model>_<ts>.json)")
+    parser.add_argument("--compare", nargs="*", default=None, help="Сравнить два файла результатов; прогоны сохраняются в out_gigachat_<model>_<ts>.json")
     parser.add_argument("--dry-validate", type=str, default=None, help="Проверить уже сохранённый JSON без обращений к ИИ")
     parser.add_argument("--samples-file", type=str, default=None, help="Путь к файлу с кейсами (по умолчанию backend/tests/samples.json)")
     args = parser.parse_args()
@@ -1068,8 +1067,7 @@ async def main():
         compare_result_files(Path(args.compare[0]), Path(args.compare[1]))
         return
 
-    provider_name = args.provider or settings.LLM_PROVIDER
-    provider = get_provider(provider_name=provider_name, model=args.model)
+    provider = get_provider(model=args.model)
     active_model = args.model or provider.default_model
 
     print(f"\n================================================================================")

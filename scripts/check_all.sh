@@ -56,7 +56,6 @@ import pydantic
 import pydantic_settings
 import aiogram
 import cryptography
-import google.genai
 import python_multipart
 import gigachat
 import pymorphy3

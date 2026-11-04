@@ -1,5 +1,5 @@
 """
-Модуль ИИ-медиатора «Буфер Ссор» (Этап 3.5: заменяемый слой провайдеров Gemini / GigaChat).
+Модуль ИИ-медиатора «Буфер Ссор» (провайдер GigaChat).
 Архитектура пайплайна:
 1. Шаг A: Анализатор версий (prompts/analyzer.txt, temperature 0.3).
    - Оценка risk_level. При high или blocked — блокировка генерации текстов, выдача фиксированного
@@ -69,7 +69,6 @@ from validators import (
 )
 from providers import get_provider, get_model_for_role
 from providers.base import LLMProvider
-from providers.gemini import GeminiProvider
 
 logger = logging.getLogger("ai_service")
 
@@ -98,7 +97,7 @@ def _resolve_provider(
     role: Optional[str] = None,
     model: Optional[str] = None,
 ) -> LLMProvider:
-    """Универсальный резолвер: преобразует старый genai.Client или None в LLMProvider."""
+    """Возвращает переданный LLMProvider или активный провайдер из настроек."""
     if isinstance(provider_or_client, LLMProvider):
         return provider_or_client
 
@@ -117,15 +116,7 @@ def _build_partner_content_parts(kind: str, raw_payload: bytes, label: str) -> L
         text_content = raw_payload.decode("utf-8", errors="replace").strip()
         parts.append(text_content)
     elif kind == "audio":
-        try:
-            from google.genai import types
-            audio_part = types.Part.from_bytes(
-                data=raw_payload,
-                mime_type="audio/ogg",
-            )
-            parts.append(audio_part)
-        except Exception:
-            parts.append("[Аудиозапись партнера]")
+        parts.append("[Голосовое сообщение]")
     parts.append(close_tag)
     return parts
 
@@ -872,12 +863,6 @@ def apply_fallback_to_field(output: MediatorOutput, location: Optional[str]) -> 
     return output
 
 
-# Совместимость со старым вызовом
-def get_genai_client():
-    """Совместимость: возвращает экземпляр GeminiProvider."""
-    return get_provider(provider_name="gemini")
-
-
 # ==============================================================================
 # Главная точка входа: analyze_session(session_id)
 # ==============================================================================
@@ -886,7 +871,7 @@ async def analyze_session(session_id: str) -> None:
     """
     Выполняет полный конфиденциальный многошаговый пайплайн разбора конфликта.
     Соблюдает строгий информационный барьер, Лестницу фоллбэков и нулевой лог сырых данных.
-    Работает с текущим активным LLMProvider (Gemini / GigaChat).
+    Работает с настроенным провайдером GigaChat.
     """
     from bot import bot, get_miniapp_keyboard
     repo = get_repo()
@@ -984,14 +969,14 @@ async def analyze_session(session_id: str) -> None:
                         logger.warning("Failed to notify user %s about unsupported audio: %s", uid, ex)
             return
 
-        # Если провайдер поддерживает аудио через транскрибацию (не gemini):
+        # Если провайдер поддерживает транскрибацию аудио через свой интерфейс:
         try:
-            if p1_kind == "audio" and provider.provider_name != "gemini":
+            if p1_kind == "audio":
                 logger.info("Transcribing audio for partner 1 via provider interface...")
                 p1_text = await provider.transcribe(p1_raw)
                 p1_raw = p1_text.encode("utf-8")
                 p1_kind = "text"
-            if p2_kind == "audio" and provider.provider_name != "gemini":
+            if p2_kind == "audio":
                 logger.info("Transcribing audio for partner 2 via provider interface...")
                 p2_text = await provider.transcribe(p2_raw)
                 p2_raw = p2_text.encode("utf-8")

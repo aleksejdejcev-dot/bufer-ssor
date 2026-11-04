@@ -1,6 +1,5 @@
 """
-Pydantic-схемы для строгого структурированного вывода (structured output)
-моделей Google Gemini на Этапе 3.1:
+Pydantic-схемы для строгого структурированного вывода (structured output):
 - Шаг A: AnalyzerOutput (анализатор версий)
 - Шаг B1/B2: PartnerResponse (автор карточки)
 - Шаг C: SharedSummary (автор общего итога)

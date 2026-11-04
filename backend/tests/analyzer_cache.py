@@ -19,7 +19,7 @@ def compute_analyzer_cache_key(
     p1_bytes: bytes,
     p2_kind: str,
     p2_bytes: bytes,
-    provider_name: str = "gemini",
+    provider_name: str = "gigachat",
     model_name: str = "",
 ) -> str:
     """Вычисляет sha256 хэш для безопасного кэширования Шага A в тестах."""

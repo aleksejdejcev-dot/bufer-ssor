@@ -15,8 +15,6 @@ os.environ["DATABASE_URL"] = os.getenv("DATABASE_URL_TEST") or os.getenv("DATABA
 os.environ["TELEGRAM_BOT_TOKEN"] = "123456:DUMMY_TOKEN"
 os.environ["TELEGRAM_WEBHOOK_SECRET"] = "dummy_secret"
 os.environ["WEBHOOK_BASE_URL"] = "https://test.ngrok.app"
-os.environ["GEMINI_MODEL"] = "gemini-3.8-flash"
-
 from aiogram.types import User, Chat, Message, Voice
 from aiogram.filters import CommandObject
 

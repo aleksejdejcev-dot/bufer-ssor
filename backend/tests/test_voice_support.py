@@ -28,7 +28,7 @@ class DummyProviderNoAudio(LLMProvider):
 
 
 class DummyProviderWithAudio(LLMProvider):
-    provider_name: str = "gemini"
+    provider_name: str = "test-provider"
     supports_audio: bool = True
 
     async def generate_json(self, *args, **kwargs):
@@ -41,7 +41,7 @@ class DummyProviderWithAudio(LLMProvider):
         return True
 
     async def get_available_models(self):
-        return ["gemini-2.5-flash"]
+        return ["test-model"]
 
 
 @pytest.mark.asyncio

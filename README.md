@@ -1,6 +1,6 @@
 # «Буфер Ссор» — ИИ-медиатор для пар в конфликте
 
-«Буфер Ссор» — это Telegram Mini App и бот-ассистент, помогающий парам экологично и безопасно разбирать разногласия с помощью искусственного интеллекта (Sber GigaChat / Google Gemini).
+«Буфер Ссор» — это Telegram Mini App и бот-ассистент, помогающий парам экологично и безопасно разбирать разногласия с помощью Sber GigaChat.
 
 ---
 
@@ -31,7 +31,7 @@
 
 ## 🤖 Подключение и настройка Сбер GigaChat (Этап 3.5)
 
-Архитектура проекта поддерживает бесшовное переключение провайдеров ИИ (`LLM_PROVIDER=gigachat` или `LLM_PROVIDER=gemini`) через абстрактный интерфейс `LLMProvider`.
+Для генерации и анализа используется Sber GigaChat через интерфейс `LLMProvider`.
 
 ### 1. Получение ключа авторизации (GIGACHAT_CREDENTIALS)
 1. Зарегистрируйтесь на портале [Сбер Салют для разработчиков](https://developers.sber.ru/studio).
@@ -86,10 +86,9 @@ python scripts/list_models.py
 
 ### 4. Голосовые сообщения
 - **GigaChat**: аудиовход не поддерживается нативно. Бот отклоняет голосовые сообщения сразу до скачивания с уведомлением: «Голосовые пока недоступны, отправь, пожалуйста, текстом».
-- **Gemini**: поддерживается прямая мультимодальная передача аудио (`audio/ogg`, `audio/mp3`) в модель.
 
 ### 5. Правовой статус и обработка данных
-- **ИИ-провайдеры**: GigaChat (серверы в РФ) или Gemini (серверы Google).
+- **ИИ-провайдер**: Sber GigaChat.
 - **База данных**: PostgreSQL (локально в Docker Compose, в промышленном контуре размещена у [провайдер, регион: заполняет владелец]). Руководство по развертыванию: `docs/DEPLOY_RU.md`. Регламент резервного копирования: `docs/BACKUPS.md`.
 - **Юридический статус**: Юридический аудит проекта не проводился. Документы являются черновиками для юриста перед коммерческим запуском. Чеклист вопросов для юриста: `LEGAL_CHECKLIST.md`.
 
@@ -169,5 +168,5 @@ PYTHONPATH=backend python backend/tests/run_samples.py --provider gigachat --mod
 
 ### Сравнение результатов двух прогонов:
 ```bash
-PYTHONPATH=backend python backend/tests/run_samples.py --compare backend/tests/out_gemini_....json backend/tests/out_gigachat_....json
+PYTHONPATH=backend python backend/tests/run_samples.py --compare backend/tests/out_gigachat_первый_прогон.json backend/tests/out_gigachat_повторный_прогон.json
 ```

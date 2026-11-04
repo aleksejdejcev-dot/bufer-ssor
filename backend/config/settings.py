@@ -31,13 +31,8 @@ class Settings(BaseSettings):
     WEBHOOK_BASE_URL: str = ""
     TELEGRAM_API_BASE_URL: Optional[str] = None
 
-    # Выбор LLM-провайдера (gigachat | gemini)
+    # Активный и единственный поддерживаемый LLM-провайдер
     LLM_PROVIDER: str = "gigachat"
-
-    # Google Gemini AI
-    GEMINI_API_KEY: str = ""
-    GEMINI_MODEL: str = "gemini-3.5-flash-lite"
-    GEMINI_CONCURRENCY: int = 2
 
     # Sber GigaChat AI
     GIGACHAT_CREDENTIALS: str = ""
@@ -60,7 +55,6 @@ class Settings(BaseSettings):
     SHARED_WRITER_TEMPERATURE: float = 0.7
     LEAK_CHECKER_TEMPERATURE: float = 0.0
     MEDIATOR_TEMPERATURE: float = 0.7
-    GEMINI_THINKING_BUDGET: Optional[int] = None
 
     # Окружение (production | development)
     ENVIRONMENT: str = "production"
@@ -101,7 +95,7 @@ class Settings(BaseSettings):
     HOST: str = "0.0.0.0"
     PORT: int = 8000
 
-    # Опциональный прокси для Gemini API
+    # Опциональный сетевой HTTP(S)-прокси
     HTTPS_PROXY: str = ""
     HTTP_PROXY: str = ""
 
@@ -121,6 +115,8 @@ def validate_production_security(s: Settings) -> None:
     """
     if s.ENVIRONMENT == "production":
         errors = []
+        if s.LLM_PROVIDER.lower() != "gigachat":
+            errors.append("LLM_PROVIDER должен быть 'gigachat'; поддерживается только GigaChat")
         if s.ENABLE_DEV_TOOLS:
             errors.append("ENABLE_DEV_TOOLS строго запрещен в режиме production")
         if s.GIGACHAT_INSECURE:
