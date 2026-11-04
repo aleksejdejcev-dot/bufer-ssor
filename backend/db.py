@@ -51,6 +51,10 @@ def check_couple_access(couple: Dict[str, Any]) -> Tuple[bool, str]:
     return get_repo().check_couple_access(couple)
 
 
+def get_subscription_until_for_user(telegram_id: int) -> Optional[str]:
+    return get_repo().get_subscription_until_for_user(telegram_id)
+
+
 def add_free_sessions(couple_id: str, count: int) -> Dict[str, Any]:
     return get_repo().add_free_sessions(couple_id, count)
 
@@ -65,6 +69,10 @@ def get_session_by_id(session_id: str) -> Optional[Dict[str, Any]]:
 
 def create_conflict_session(couple_id: str, initiator_id: int) -> Dict[str, Any]:
     return get_repo().create_conflict_session(couple_id, initiator_id)
+
+
+def create_conflict_session_with_access(couple_id: str, initiator_id: int) -> Optional[Dict[str, Any]]:
+    return get_repo().create_conflict_session_with_access(couple_id, initiator_id)
 
 
 def update_session_status(
@@ -172,8 +180,9 @@ def activate_subscription_for_couple(
     couple_id: Any,
     payment_id: str,
     days: int = 30,
+    payer_id: Optional[int] = None,
 ) -> Optional[Dict[str, Any]]:
-    return get_repo().activate_subscription_for_couple(couple_id, payment_id, days)
+    return get_repo().activate_subscription_for_couple(couple_id, payment_id, days, payer_id)
 
 
 def revoke_subscription_for_couple(
