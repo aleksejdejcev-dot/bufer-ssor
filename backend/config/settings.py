@@ -94,7 +94,7 @@ class Settings(BaseSettings):
     # Сроки хранения данных
     EXPIRATION_HOURS: int = 48
     RAW_INPUT_TTL_HOURS: int = 48
-    RESULTS_RETENTION_DAYS: int = 30
+    RESULTS_RETENTION_DAYS: int = 0
     PAYMENT_RETENTION_YEARS: Optional[int] = None
 
     # Настройки сервера

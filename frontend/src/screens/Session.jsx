@@ -52,6 +52,12 @@ export default function Session({ sessionId, onBack }) {
       setSession(data);
       setErrorMsg(null);
 
+      if (data.status === 'completed' && (data.personal_advice || data.shared_summary)) {
+        api.markConflictResultSeen(sessionId).catch((err) => {
+          console.warn('Could not mark conflict result as seen:', err);
+        });
+      }
+
       // Если статус финальный — останавливаем поллинг
       if (['completed', 'failed', 'expired'].includes(data.status)) {
         if (pollerRef.current) {
@@ -65,6 +71,15 @@ export default function Session({ sessionId, onBack }) {
         }
       }
     } catch (err) {
+      if (err?.status === 410) {
+        setSession({ status: 'completed', personal_advice: null, shared_summary: null });
+        setErrorMsg(null);
+        if (pollerRef.current) {
+          clearInterval(pollerRef.current);
+          pollerRef.current = null;
+        }
+        return;
+      }
       console.error('Fetch session error:', err);
       setErrorMsg(err.message || 'Ошибка загрузки статуса сессии');
       if (pollerRef.current) {
@@ -252,6 +267,12 @@ export default function Session({ sessionId, onBack }) {
               <CheckCircle2 size={16} className="text-emerald-600 dark:text-emerald-400 shrink-0" />
               <span>Ваш персональный разбор готов</span>
             </div>
+
+            {!session?.personal_advice && !session?.shared_summary && (
+              <div className="p-4 rounded-xl bg-slate-50 dark:bg-zinc-900 text-slate-600 dark:text-slate-300 text-sm border border-slate-200 dark:border-zinc-800">
+                Результат был показан после разбора и сразу удалён из базы. Тексты конфликта и карточки не хранятся.
+              </div>
+            )}
 
             {/* ВЕТКА БЕЗОПАСНОСТИ: RISK_LEVEL == HIGH                              */}
             {riskLevel === 'high' ? (

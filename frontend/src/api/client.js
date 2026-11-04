@@ -159,6 +159,10 @@ export const api = {
     return request(`/conflict/${sessionId}`, { method: 'GET' });
   },
 
+  async markConflictResultSeen(sessionId) {
+    return request(`/conflict/${sessionId}/result-seen`, { method: 'POST' });
+  },
+
   /**
    * Обновить оценку погоды в отношениях (1-10)
    */

@@ -512,10 +512,6 @@ class PostgresRepo:
             pool = await self._get_pool()
             s_uuid = uuid.UUID(session_id)
             c_at = datetime.fromisoformat(completed_at)
-            p1_json = json.dumps(results.get("partner_1_response"))
-            p2_json = json.dumps(results.get("partner_2_response"))
-            shared_json = json.dumps(results.get("shared_summary"))
-
             async with pool.acquire() as conn:
                 async with conn.transaction():
                     await conn.execute("""
@@ -527,11 +523,55 @@ class PostgresRepo:
                             ai_advice_p2 = $5::jsonb,
                             shared_summary = $6::jsonb
                         WHERE id = $1;
-                    """, s_uuid, c_at, risk_level, p1_json, p2_json, shared_json)
+                    """, s_uuid, c_at, risk_level,
+                         json.dumps(results.get("partner_1_response") or results.get("partner_1_card") or results.get("ai_advice_p1")),
+                         json.dumps(results.get("partner_2_response") or results.get("partner_2_card") or results.get("ai_advice_p2")),
+                         json.dumps(results.get("shared_summary")))
 
                     # Безвозвратно удаляем временные зашифрованные исходники
                     await conn.execute("DELETE FROM pending_inputs WHERE session_id = $1;", s_uuid)
         self._run_async(_impl())
+
+    def delete_analysis_results(self, session_id: str) -> None:
+        async def _impl():
+            pool = await self._get_pool()
+            async with pool.acquire() as conn:
+                await conn.execute("""
+                    UPDATE conflict_sessions
+                    SET ai_advice_p1 = NULL, ai_advice_p2 = NULL, shared_summary = NULL,
+                        status = 'purged_by_retention'
+                    WHERE id = $1;
+                """, uuid.UUID(session_id))
+        self._run_async(_impl())
+
+    def mark_conflict_result_seen(self, session_id: str, telegram_id: int) -> bool:
+        async def _impl():
+            pool = await self._get_pool()
+            async with pool.acquire() as conn:
+                async with conn.transaction():
+                    row = await conn.fetchrow("""
+                        UPDATE conflict_sessions AS s
+                        SET result_seen_by_p1 = s.result_seen_by_p1 OR c.partner_1_id = $2,
+                            result_seen_by_p2 = s.result_seen_by_p2 OR (c.partner_2_id = $2) IS TRUE,
+                            ai_advice_p1 = CASE WHEN (s.result_seen_by_p1 OR c.partner_1_id = $2)
+                                                     AND (s.result_seen_by_p2 OR (c.partner_2_id = $2) IS TRUE)
+                                                THEN NULL ELSE s.ai_advice_p1 END,
+                            ai_advice_p2 = CASE WHEN (s.result_seen_by_p1 OR c.partner_1_id = $2)
+                                                     AND (s.result_seen_by_p2 OR (c.partner_2_id = $2) IS TRUE)
+                                                THEN NULL ELSE s.ai_advice_p2 END,
+                            shared_summary = CASE WHEN (s.result_seen_by_p1 OR c.partner_1_id = $2)
+                                                       AND (s.result_seen_by_p2 OR (c.partner_2_id = $2) IS TRUE)
+                                                  THEN NULL ELSE s.shared_summary END,
+                            status = CASE WHEN (s.result_seen_by_p1 OR c.partner_1_id = $2)
+                                               AND (s.result_seen_by_p2 OR (c.partner_2_id = $2) IS TRUE)
+                                          THEN 'purged_by_retention' ELSE s.status END
+                        FROM couples AS c
+                        WHERE s.id = $1 AND s.couple_id = c.id
+                          AND s.status = 'completed' AND $2 IN (c.partner_1_id, c.partner_2_id)
+                        RETURNING s.id;
+                    """, uuid.UUID(session_id), telegram_id)
+                    return row is not None
+        return self._run_async(_impl())
 
     def get_expired_sessions(self) -> List[Dict[str, Any]]:
         async def _impl():
@@ -662,7 +702,7 @@ class PostgresRepo:
                     await conn.execute("DELETE FROM conflict_sessions WHERE couple_id = $1;", c_uuid)
         self._run_async(_impl())
 
-    def purge_expired_data(self, days_retention: int = 30, hours_raw_ttl: int = 48) -> Dict[str, int]:
+    def purge_expired_data(self, days_retention: int = 0, hours_raw_ttl: int = 48) -> Dict[str, int]:
         async def _impl():
             pool = await self._get_pool()
             async with pool.acquire() as conn:

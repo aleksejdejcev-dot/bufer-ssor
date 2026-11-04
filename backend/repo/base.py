@@ -87,9 +87,17 @@ class Repository(Protocol):
         completed_at: str,
     ) -> None:
         """
-        Запись результатов анализа (ai_advice_p1/p2, shared_summary, risk_level,
-        status=completed, completed_at) и удаление pending_inputs.
+        Временная запись результатов анализа до просмотра обоими участниками,
+        фиксация статуса/времени завершения и удаление pending_inputs.
         """
+        ...
+
+    def delete_analysis_results(self, session_id: str) -> None:
+        """Удаляет карточки и общий результат после их выдачи участникам."""
+        ...
+
+    def mark_conflict_result_seen(self, session_id: str, telegram_id: int) -> bool:
+        """Records participant's receipt; deletes result after both participants received it."""
         ...
 
     def get_expired_sessions(self) -> List[Dict[str, Any]]:
@@ -129,10 +137,9 @@ class Repository(Protocol):
         """Удаляет только сессии и историю ссоры пары, профили и подписка остаются."""
         ...
 
-    def purge_expired_data(self, days_retention: int = 30, hours_raw_ttl: int = 48) -> Dict[str, int]:
+    def purge_expired_data(self, days_retention: int = 0, hours_raw_ttl: int = 48) -> Dict[str, int]:
         """
-        Очистка устаревших завершенных сессий (обнуление карточек, статус purged_by_retention)
-        и удаление зависших сырых данных pending_inputs.
+        Очистка завершенных сессий по настроенному сроку и удаление зависших сырых данных pending_inputs.
         """
         ...
 

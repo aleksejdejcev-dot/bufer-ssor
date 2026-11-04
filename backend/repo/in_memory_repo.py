@@ -23,6 +23,7 @@ class InMemoryRepo:
         self.rate_limiter = RateLimiter()
         self.advisory_locks: set[int] = set()
         self.deletions_log: List[Dict[str, Any]] = []
+        self.conflict_result_seen: Dict[str, set[int]] = {}
 
     def reset_state(self) -> None:
         self.users.clear()
@@ -34,6 +35,7 @@ class InMemoryRepo:
         self.rate_limiter = RateLimiter()
         self.advisory_locks.clear()
         self.deletions_log.clear()
+        self.conflict_result_seen.clear()
         self.payments.clear()
         self.rate_limiter.clear()
 
@@ -301,6 +303,28 @@ class InMemoryRepo:
         # Удаление pending_inputs
         self.delete_pending_inputs_for_session(session_id)
 
+    def delete_analysis_results(self, session_id: str) -> None:
+        session = self.conflict_sessions.get(session_id)
+        if session:
+            session["ai_advice_p1"] = None
+            session["ai_advice_p2"] = None
+            session["shared_summary"] = None
+            session["status"] = "purged_by_retention"
+
+    def mark_conflict_result_seen(self, session_id: str, telegram_id: int) -> bool:
+        session = self.conflict_sessions.get(session_id)
+        if not session:
+            return False
+        couple = self.couples.get(session.get("couple_id"))
+        if not couple:
+            return False
+        seen = self.conflict_result_seen.setdefault(session_id, set())
+        seen.add(telegram_id)
+        participants = {x for x in (couple.get("partner_1_id"), couple.get("partner_2_id")) if x}
+        if participants and participants.issubset(seen):
+            self.delete_analysis_results(session_id)
+        return True
+
     def get_expired_sessions(self) -> List[Dict[str, Any]]:
         cutoff = (datetime.now(timezone.utc) - timedelta(hours=settings.EXPIRATION_HOURS)).isoformat()
         return [
@@ -402,7 +426,7 @@ class InMemoryRepo:
             couple["mood_updated_at_p1"] = None
             couple["mood_updated_at_p2"] = None
 
-    def purge_expired_data(self, days_retention: int = 30, hours_raw_ttl: int = 48) -> Dict[str, int]:
+    def purge_expired_data(self, days_retention: int = 0, hours_raw_ttl: int = 48) -> Dict[str, int]:
         now = datetime.now(timezone.utc)
         sess_cutoff = (now - timedelta(days=days_retention)).isoformat()
         inp_cutoff = (now - timedelta(hours=hours_raw_ttl)).isoformat()
@@ -411,7 +435,10 @@ class InMemoryRepo:
         for s in self.conflict_sessions.values():
             if s.get("status") == "completed":
                 c_at = s.get("completed_at") or ""
-                if c_at and c_at <= sess_cutoff:
+                seen = self.conflict_result_seen.get(s.get("id"), set())
+                couple = self.couples.get(s.get("couple_id"), {})
+                participants = {x for x in (couple.get("partner_1_id"), couple.get("partner_2_id")) if x}
+                if (participants and participants.issubset(seen)) or days_retention <= 0 or (c_at and c_at <= sess_cutoff):
                     s["ai_advice_p1"] = None
                     s["ai_advice_p2"] = None
                     s["shared_summary"] = None
