@@ -26,6 +26,7 @@ export default function Session({ sessionId, onBack }) {
   const [isFinishing, setIsFinishing] = useState(false);
   const [finishError, setFinishError] = useState(null);
   const pollerRef = useRef(null);
+  const completedHapticSessionRef = useRef(null);
 
   // Нативная кнопка BackButton Telegram
   useEffect(() => {
@@ -54,7 +55,8 @@ export default function Session({ sessionId, onBack }) {
       setSession(data);
       setErrorMsg(null);
 
-      if (data.status === 'completed') {
+      if (data.status === 'completed' && completedHapticSessionRef.current !== sessionId) {
+        completedHapticSessionRef.current = sessionId;
         try {
           WebApp.HapticFeedback?.notificationOccurred('success');
         } catch {}
