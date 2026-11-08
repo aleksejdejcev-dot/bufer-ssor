@@ -28,7 +28,7 @@ export default function App() {
 
         const syncTheme = () => {
           const isDark = WebApp.colorScheme === 'dark';
-          const background = isDark ? '#15131b' : '#faf9fc';
+          const background = isDark ? '#17151f' : '#f8f6fb';
           document.documentElement.classList.toggle('dark', isDark);
           const themeMeta = document.querySelector('meta[name="theme-color"]');
           if (themeMeta) themeMeta.setAttribute('content', background);
