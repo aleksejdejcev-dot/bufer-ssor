@@ -80,6 +80,10 @@ class Repository(Protocol):
     def get_session_by_id(self, session_id: str) -> Optional[Dict[str, Any]]:
         ...
 
+    def get_sessions_for_analysis_recovery(self) -> List[Dict[str, Any]]:
+        """Return sessions that should resume analysis after a process restart."""
+        ...
+
     def create_conflict_session(self, couple_id: str, initiator_id: int) -> Dict[str, Any]:
         ...
 
