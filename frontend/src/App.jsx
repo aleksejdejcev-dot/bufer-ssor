@@ -209,13 +209,10 @@ export default function App() {
         setCurrentScreen('session');
       }}
       onStartBalance={async () => {
-        try {
-          const balance = await api.startRelationshipBalance();
-          setBalanceSessionId(balance.id);
-          setCurrentScreen('balance');
-        } catch (err) {
-          WebApp.showAlert(err.message || 'Не удалось начать баланс отношений');
-        }
+        const balance = await api.startRelationshipBalance();
+        if (!balance?.id) throw new Error('Сервер не вернул данные баланса. Попробуйте ещё раз.');
+        setBalanceSessionId(balance.id);
+        setCurrentScreen('balance');
       }}
       onOpenActiveSession={(sessionId) => {
         setActiveSessionId(sessionId);

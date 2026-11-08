@@ -51,6 +51,7 @@ export default function Home({ meData, onStartSession, onOpenActiveSession, onSt
   const [whiteFlagSuccess, setWhiteFlagSuccess] = useState(false);
   const [isSendingWhiteFlag, setIsSendingWhiteFlag] = useState(false);
   const [isStartingConflict, setIsStartingConflict] = useState(false);
+  const [isStartingBalance, setIsStartingBalance] = useState(false);
   const [globalError, setGlobalError] = useState(null);
 
   // Синхронизация локального настроения при обновлении профиля
@@ -178,6 +179,24 @@ export default function Home({ meData, onStartSession, onOpenActiveSession, onSt
       }
     } catch (err) {
       setGlobalError(err.message || 'Ошибка генерации инвайта');
+    }
+  };
+
+  const handleStartBalance = async () => {
+    if (!couple?.has_partner) {
+      setGlobalError('Чтобы пройти баланс отношений вместе, сначала подключите партнёра — нажмите «Пригласить» в карточке пары.');
+      return;
+    }
+    if (isStartingBalance) return;
+    setIsStartingBalance(true);
+    setGlobalError(null);
+    try {
+      if (!onStartBalance) throw new Error('Не удалось открыть баланс отношений. Перезагрузите приложение и попробуйте ещё раз.');
+      await onStartBalance();
+    } catch (err) {
+      setGlobalError(err.message || 'Не удалось начать баланс отношений. Попробуйте ещё раз.');
+    } finally {
+      setIsStartingBalance(false);
     }
   };
 
@@ -398,16 +417,17 @@ export default function Home({ meData, onStartSession, onOpenActiveSession, onSt
 
         <button
           type="button"
-          onClick={onStartBalance}
-          disabled={!couple?.has_partner}
-          className="w-full rounded-2xl border border-violet-200 dark:border-violet-900/70 bg-violet-50/70 dark:bg-violet-950/30 p-4 text-left flex items-center gap-3 disabled:opacity-70 balance-launch-card app-interactive-card"
+          onClick={handleStartBalance}
+          disabled={isStartingBalance}
+          aria-busy={isStartingBalance}
+          className="w-full rounded-2xl border border-violet-200 dark:border-violet-900/70 bg-violet-50/70 dark:bg-violet-950/30 p-4 text-left flex items-center gap-3 balance-launch-card app-interactive-card"
         >
-          <span className="w-10 h-10 rounded-xl bg-violet-100 dark:bg-violet-900/60 text-violet-600 dark:text-violet-300 flex items-center justify-center shrink-0"><Activity size={20} /></span>
+          <span className="w-10 h-10 rounded-xl bg-violet-100 dark:bg-violet-900/60 text-violet-600 dark:text-violet-300 flex items-center justify-center shrink-0">{isStartingBalance ? <Activity size={20} className="animate-spin" /> : <Activity size={20} />}</span>
           <span className="min-w-0 flex-1">
             <span className="block text-sm font-bold text-slate-900 dark:text-slate-100">Баланс отношений</span>
-            <span className="block text-xs text-slate-500 dark:text-slate-400 mt-0.5">{couple?.has_partner ? 'Короткий check-in для вас обоих и идеи, чем заняться вместе' : 'Подключите партнёра, чтобы пройти вместе'}</span>
+            <span className="block text-xs text-slate-500 dark:text-slate-400 mt-0.5">{isStartingBalance ? 'Открываем ваш баланс…' : couple?.has_partner ? 'Короткий check-in для вас обоих и идеи, чем заняться вместе' : 'Подключите партнёра, чтобы пройти вместе'}</span>
           </span>
-          {couple?.has_partner && <ArrowRight size={18} className="text-violet-500 shrink-0" />}
+          {couple?.has_partner && !isStartingBalance && <ArrowRight size={18} className="text-violet-500 shrink-0" />}
         </button>
 
         {/* =================================================================== */}
