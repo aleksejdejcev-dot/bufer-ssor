@@ -16,7 +16,7 @@ import uuid
 import secrets
 import logging
 import asyncio
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Optional, Literal
 from urllib.parse import parse_qsl, urlencode
@@ -42,6 +42,8 @@ from bot import (
     analyze_session,
     setup_bot_commands,
     notify_initiator_prompt,
+    notify_partner_prompt,
+    notify_conflict_partner_prompt,
     send_white_flag,
     send_hint_message,
     send_subscription_success,
@@ -404,6 +406,10 @@ async def require_legal_accepted(user: dict = Depends(get_current_user)) -> dict
 class LegalAcceptRequest(BaseModel):
     confirm_18_plus: bool = Field(..., description="Подтверждение возраста 18+")
     accept_terms: bool = Field(..., description="Согласие с условиями использования и политикой конфиденциальности")
+
+
+class CoupleJoinRequest(BaseModel):
+    invite_code: str = Field(..., min_length=4, max_length=32)
 
 
 class MoodRequest(BaseModel):
@@ -799,6 +805,37 @@ async def create_couple_invite(user: dict = Depends(require_legal_accepted)):
     }
 
 
+@app.post("/couple/join")
+async def join_couple_from_invite(
+    payload: CoupleJoinRequest,
+    user: dict = Depends(require_legal_accepted),
+):
+    telegram_id = user["telegram_id"]
+    code = normalize_invite_code(payload.invite_code)
+    couple = db.get_couple_by_invite(code)
+    if not couple:
+        raise HTTPException(status_code=404, detail="Приглашение не найдено или недействительно")
+    expires_at = couple.get("invite_expires_at")
+    if expires_at and datetime.fromisoformat(expires_at.replace("Z", "+00:00")) <= datetime.now(timezone.utc):
+        raise HTTPException(status_code=410, detail="Срок действия приглашения истёк")
+    if couple["partner_1_id"] == telegram_id:
+        raise HTTPException(status_code=400, detail="Нельзя присоединиться к собственной паре")
+    if couple.get("partner_2_id"):
+        if couple.get("partner_2_id") == telegram_id:
+            return {"status": "already_joined", "partner_name": "Партнер"}
+        raise HTTPException(status_code=409, detail="К этой паре уже присоединился партнер")
+    existing = db.get_user_couple(telegram_id)
+    if existing and existing["id"] != couple["id"]:
+        raise HTTPException(status_code=409, detail="Вы уже состоите в другой паре")
+    try:
+        db.join_couple(couple["id"], telegram_id)
+    except ValueError:
+        raise HTTPException(status_code=409, detail="К этой паре уже присоединился партнер")
+    partner = db.get_user(couple["partner_1_id"])
+    asyncio.create_task(notify_partner_prompt(couple["partner_1_id"], user.get("first_name", "Партнер")))
+    return {"status": "joined", "partner_name": partner.get("first_name", "Партнер") if partner else "Партнер"}
+
+
 @app.delete("/history")
 async def delete_couple_history(user: dict = Depends(require_legal_accepted)):
     """
@@ -961,8 +998,10 @@ async def start_conflict_session(user: dict = Depends(require_legal_accepted)):
             detail="В вашей паре уже есть активный разбор. Завершите его перед началом нового.",
         )
 
-    # Бот пишет Партнеру А приглашение рассказать позицию
+    # Бот сразу приглашает обоих партнеров рассказать свои версии.
     asyncio.create_task(notify_initiator_prompt(telegram_id))
+    partner_id = couple["partner_2_id"] if telegram_id == couple["partner_1_id"] else couple["partner_1_id"]
+    asyncio.create_task(notify_conflict_partner_prompt(partner_id, user.get("first_name", "Партнер")))
 
     return {
         "status": "started",

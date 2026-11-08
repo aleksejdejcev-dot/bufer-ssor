@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import WebApp from '@twa-dev/sdk';
 import { api, ApiError } from './api/client';
 import Onboarding from './screens/Onboarding';
@@ -13,6 +13,8 @@ export default function App() {
   const [meData, setMeData] = useState(null);
   const [activeSessionId, setActiveSessionId] = useState(null);
   const [initError, setInitError] = useState(null);
+  const inviteHandledRef = useRef(false);
+  const inviteCode = new URLSearchParams(window.location.search).get('invite');
 
   // Инициализация Telegram WebApp и синхронизация темы
   useEffect(() => {
@@ -64,13 +66,27 @@ export default function App() {
         // Если уже есть активная сессия в статусе waiting или analyzing — остаемся на главной с бейджем,
         // либо пользователь может продолжить по кнопке
         setCurrentScreen('home');
+        if (inviteCode && !inviteHandledRef.current) {
+          inviteHandledRef.current = true;
+          try {
+            await api.joinCouple(inviteCode);
+            const url = new URL(window.location.href);
+            url.searchParams.delete('invite');
+            window.history.replaceState({}, '', url);
+            const refreshed = await api.getMe();
+            setMeData(refreshed);
+          } catch (err) {
+            inviteHandledRef.current = false;
+            try { WebApp.showAlert(err.message || 'Не удалось подключиться к паре'); } catch {}
+          }
+        }
       }
     } catch (err) {
       console.error('Failed to load user profile:', err);
       setInitError(err);
       setCurrentScreen('error');
     }
-  }, []);
+  }, [inviteCode]);
 
   const isInsideTelegram = Boolean(
     typeof window !== 'undefined' &&

@@ -62,7 +62,7 @@ router = Router()
 dp.include_router(router)
 
 
-def get_miniapp_keyboard(is_admin_user: bool = False) -> InlineKeyboardMarkup:
+def get_miniapp_keyboard(is_admin_user: bool = False, invite_code: Optional[str] = None) -> InlineKeyboardMarkup:
     """Кнопка для открытия Telegram Mini App и админ-панели"""
     url = (
         os.getenv("MINI_APP_URL")
@@ -71,6 +71,9 @@ def get_miniapp_keyboard(is_admin_user: bool = False) -> InlineKeyboardMarkup:
         or getattr(settings, "MINIAPP_URL", None)
         or "https://bufer-ssor.ru"
     )
+    if invite_code and not url.startswith("https://t.me/"):
+        separator = "&" if "?" in url else "?"
+        url = f"{url}{separator}invite={invite_code}"
     buttons = []
     if url.startswith("https://t.me/"):
         buttons.append([InlineKeyboardButton(text="Открыть Буфер Ссор 💬", url=url)])
@@ -174,7 +177,7 @@ async def handle_start(message: Message, command: CommandObject):
                 "Прежде чем присоединиться к паре, необходимо подтвердить возраст 18+ "
                 "и согласиться с правилами сервиса в приложении.\n\n"
                 "Сервис не является психотерапией и служит помощником для спокойной коммуникации в паре.",
-                reply_markup=get_miniapp_keyboard(),
+                reply_markup=get_miniapp_keyboard(invite_code=invite_code),
             )
             return
 
@@ -644,20 +647,6 @@ async def handle_conflict_input(message: Message):
             parse_mode=ParseMode.HTML,
         )
 
-        try:
-            await bot.send_message(
-                chat_id=other_id,
-                text=(
-                    f"🕊️ <b>{first_name}</b> хочет спокойно разобраться в ситуации и помириться.\n\n"
-                    "Расскажи мне свою версию текстом прямо сюда в чат.\n"
-                    "Она полностью конфиденциальна: твой партнер НЕ увидит твой ответ."
-                ),
-                parse_mode=ParseMode.HTML,
-                reply_markup=get_miniapp_keyboard(),
-            )
-        except Exception as e:
-            logger.warning("Не удалось отправить уведомление второму партнеру (%s): %s", other_id, e)
-
     elif inputs_count >= 2:
         # Оба партнера ответили — переводим статус в analyzing
         db.update_session_status(session_id, status="analyzing")
@@ -706,6 +695,39 @@ async def notify_initiator_prompt(initiator_id: int):
         )
     except Exception as e:
         logger.warning("Не удалось отправить промпт инициатору (%s): %s", initiator_id, e)
+
+
+async def notify_partner_prompt(partner_id: int, initiator_name: str = "Партнер"):
+    """Сообщает о подключении к паре либо приглашает второго участника в активный разбор."""
+    try:
+        await bot.send_message(
+            chat_id=partner_id,
+            text=(
+                f"🎉 <b>{initiator_name}</b> подключил(-а) вас к паре.\n\n"
+                "Теперь вы можете вместе пользоваться Буфером Ссор."
+            ),
+            parse_mode=ParseMode.HTML,
+            reply_markup=get_miniapp_keyboard(),
+        )
+    except Exception as e:
+        logger.warning("Не удалось уведомить участника пары (%s): %s", partner_id, e)
+
+
+async def notify_conflict_partner_prompt(partner_id: int, initiator_name: str):
+    """Сразу зовет второго участника рассказать свою версию начавшегося конфликта."""
+    try:
+        await bot.send_message(
+            chat_id=partner_id,
+            text=(
+                f"🕊️ <b>{initiator_name}</b> начал(-а) разбор конфликта.\n\n"
+                "Расскажи свою версию текстом прямо сюда в чат. Она конфиденциальна: "
+                "партнер не увидит твой ответ."
+            ),
+            parse_mode=ParseMode.HTML,
+            reply_markup=get_miniapp_keyboard(),
+        )
+    except Exception as e:
+        logger.warning("Не удалось отправить приглашение ко второму мнению (%s): %s", partner_id, e)
 
 
 async def send_white_flag(to_telegram_id: int):

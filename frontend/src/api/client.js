@@ -131,6 +131,13 @@ export const api = {
     return request('/couple/invite', { method: 'POST' });
   },
 
+  async joinCouple(inviteCode) {
+    return request('/couple/join', {
+      method: 'POST',
+      body: JSON.stringify({ invite_code: inviteCode }),
+    });
+  },
+
   /**
    * Удаляет пару, профили и данные разборов; финансовые записи и личная подписка плательщика сохраняются отдельно.
    */
