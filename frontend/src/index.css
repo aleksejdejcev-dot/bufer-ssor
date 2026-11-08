@@ -3,16 +3,37 @@
 @tailwind utilities;
 
 :root {
-  --tg-theme-bg-color: #f8fafc;
-  --tg-theme-text-color: #0f172a;
-  --tg-theme-hint-color: #64748b;
-  --tg-theme-link-color: #4f46e5;
-  --tg-theme-button-color: #4f46e5;
+  color-scheme: light;
+  --app-bg: #faf9fc;
+  --app-surface: rgba(255, 255, 255, 0.9);
+  --app-border: rgba(104, 91, 137, 0.12);
+  --app-shadow: 0 14px 40px rgba(49, 37, 82, 0.07);
+  --tg-theme-bg-color: #faf9fc;
+  --tg-theme-text-color: #241f30;
+  --tg-theme-hint-color: #777185;
+  --tg-theme-link-color: #6e5bd1;
+  --tg-theme-button-color: #6e5bd1;
   --tg-theme-button-text-color: #ffffff;
-  --tg-theme-secondary-bg-color: #f1f5f9;
+  --tg-theme-secondary-bg-color: #f2f0f7;
   --tg-theme-header-bg-color: #ffffff;
   --tg-theme-section-bg-color: #ffffff;
   --tg-theme-destructive-text-color: #ef4444;
+}
+
+html.dark {
+  color-scheme: dark;
+  --app-bg: #15131b;
+  --app-surface: rgba(34, 31, 43, 0.92);
+  --app-border: rgba(203, 190, 240, 0.1);
+  --app-shadow: 0 16px 44px rgba(0, 0, 0, 0.24);
+  --tg-theme-bg-color: #15131b;
+  --tg-theme-text-color: #f2eff8;
+  --tg-theme-hint-color: #a19aac;
+  --tg-theme-link-color: #a394fa;
+  --tg-theme-button-color: #806de3;
+  --tg-theme-secondary-bg-color: #211e28;
+  --tg-theme-header-bg-color: #1b1822;
+  --tg-theme-section-bg-color: #211e28;
 }
 
 /* Применение системных цветов Telegram WebApp, если доступны */
@@ -24,11 +45,21 @@ html {
 
 body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  background-color: var(--tg-theme-bg-color);
+  background-color: var(--app-bg);
+  background-image:
+    radial-gradient(ellipse 85% 42% at 50% -12%, rgba(133, 111, 222, 0.1), transparent 74%),
+    radial-gradient(ellipse 48% 32% at 100% 55%, rgba(237, 172, 177, 0.055), transparent 78%);
   color: var(--tg-theme-text-color);
   overflow-x: hidden;
   min-height: 100vh;
   min-height: var(--tg-viewport-stable-height, 100vh);
+  transition: background-color 260ms ease, color 220ms ease;
+}
+
+html.dark body {
+  background-image:
+    radial-gradient(ellipse 82% 42% at 50% -12%, rgba(111, 92, 190, 0.16), transparent 74%),
+    radial-gradient(ellipse 52% 38% at 100% 62%, rgba(125, 78, 111, 0.09), transparent 78%);
 }
 
 /* Плавный скролл */
@@ -40,4 +71,163 @@ body {
 /* Скрытие стрелок у number input */
 input[type=range] {
   accent-color: var(--tg-theme-button-color, #4f46e5);
+  height: 8px;
+  border-radius: 999px;
+  box-shadow: inset 0 1px 2px rgba(36, 31, 48, 0.08);
+}
+
+input[type=range]::-webkit-slider-thumb {
+  width: 20px;
+  height: 20px;
+  appearance: none;
+  border: 4px solid #7967dc;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 2px 8px rgba(72, 56, 137, 0.25);
+  transition: transform 160ms ease, box-shadow 160ms ease;
+}
+
+input[type=range]::-webkit-slider-thumb:active {
+  transform: scale(1.12);
+  box-shadow: 0 3px 12px rgba(72, 56, 137, 0.34);
+}
+
+input[type=range]::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border: 4px solid #7967dc;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 2px 8px rgba(72, 56, 137, 0.25);
+}
+
+button,
+[role='button'] {
+  -webkit-tap-highlight-color: transparent;
+  transition-property: color, background-color, border-color, box-shadow, opacity, transform;
+  transition-duration: 180ms;
+  transition-timing-function: cubic-bezier(0.2, 0.75, 0.25, 1);
+}
+
+button:not(:disabled):active,
+[role='button']:active {
+  transform: scale(0.985);
+}
+
+button:focus-visible,
+[role='button']:focus-visible,
+input:focus-visible {
+  outline: 3px solid rgba(128, 109, 227, 0.42);
+  outline-offset: 3px;
+}
+
+/* Мягкие поверхности и характерные акценты Mini App */
+.dark .bg-white {
+  background-color: var(--app-surface) !important;
+}
+
+.bg-white.rounded-2xl,
+.dark .bg-white.rounded-2xl {
+  box-shadow: var(--app-shadow);
+}
+
+.app-card {
+  border-color: var(--app-border);
+  box-shadow: var(--app-shadow);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+}
+
+.app-home-stack > * {
+  animation: cardEnter 520ms cubic-bezier(0.2, 0.75, 0.25, 1) backwards;
+}
+
+.app-home-stack > *:nth-child(1) { animation-delay: 25ms; }
+.app-home-stack > *:nth-child(2) { animation-delay: 75ms; }
+.app-home-stack > *:nth-child(3) { animation-delay: 125ms; }
+.app-home-stack > *:nth-child(4) { animation-delay: 175ms; }
+.app-home-stack > *:nth-child(5) { animation-delay: 225ms; }
+
+.home-conflict-card {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+  background-image: linear-gradient(118deg, #6555d6 0%, #7957dc 52%, #9262df 100%) !important;
+  background-size: 180% 180%;
+  animation: gradientDrift 14s ease-in-out infinite;
+  box-shadow: 0 18px 42px rgba(104, 79, 197, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.2);
+}
+
+.home-conflict-card::after {
+  content: '';
+  position: absolute;
+  width: 180px;
+  height: 180px;
+  right: -74px;
+  top: -92px;
+  z-index: 0;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+  filter: blur(2px);
+  pointer-events: none;
+}
+
+.home-conflict-card > * {
+  position: relative;
+  z-index: 1;
+}
+
+.home-conflict-icon {
+  box-shadow: 0 8px 24px rgba(43, 29, 118, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.2);
+}
+
+.balance-hero {
+  background-image:
+    radial-gradient(circle at 90% 8%, rgba(255, 255, 255, 0.2), transparent 34%),
+    linear-gradient(125deg, #6455d4, #7959d8 56%, #8d65d7) !important;
+  background-size: 150% 150%;
+  animation: gradientDrift 16s ease-in-out infinite;
+  box-shadow: 0 18px 40px rgba(91, 69, 170, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.2);
+}
+
+.balance-launch-card {
+  background: linear-gradient(110deg, rgba(243, 241, 255, 0.92), rgba(250, 244, 250, 0.92)) !important;
+  box-shadow: 0 8px 24px rgba(78, 63, 132, 0.055);
+}
+
+.dark .balance-launch-card {
+  background: linear-gradient(110deg, rgba(43, 37, 63, 0.86), rgba(46, 35, 50, 0.86)) !important;
+}
+
+.app-interactive-card {
+  transition: transform 220ms cubic-bezier(0.2, 0.75, 0.25, 1), box-shadow 220ms ease, border-color 220ms ease;
+}
+
+@media (hover: hover) {
+  .app-interactive-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 16px 36px rgba(49, 37, 82, 0.11);
+  }
+  .dark .app-interactive-card:hover {
+    box-shadow: 0 16px 36px rgba(0, 0, 0, 0.3);
+  }
+}
+
+@keyframes cardEnter {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes gradientDrift {
+  0%, 100% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

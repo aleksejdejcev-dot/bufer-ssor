@@ -226,8 +226,8 @@ export default function Home({ meData, onStartSession, onOpenActiveSession, onSt
   };
 
   return (
-    <div className="min-h-screen flex flex-col justify-between px-4 pt-2 pb-4 sm:px-5 sm:pt-3 sm:pb-5 max-w-md mx-auto animate-fade-in bg-slate-50/50 dark:bg-zinc-950">
-      <div className="space-y-3">
+    <div className="min-h-screen flex flex-col justify-between px-4 pt-2 pb-4 sm:px-5 sm:pt-3 sm:pb-5 max-w-md mx-auto animate-fade-in bg-slate-50/50 dark:bg-zinc-950/55">
+      <div className="space-y-3 app-home-stack">
         {/* Шапка: компактный логотип 32x32px, аккуратный заголовок и кнопка/бейдж статуса */}
         <div className="flex items-center justify-between py-2">
           <div className="flex items-center gap-2.5">
@@ -311,7 +311,7 @@ export default function Home({ meData, onStartSession, onOpenActiveSession, onSt
         {/* =================================================================== */}
         {/* ЭЛЕМЕНТ 1: Статус-бар пары + Погода в отношениях (Слайдер 1-10)     */}
         {/* =================================================================== */}
-        <div className="bg-white dark:bg-zinc-900 rounded-2xl p-4 border border-slate-200/70 dark:border-zinc-800 shadow-sm space-y-4">
+        <div className="bg-white dark:bg-zinc-900 rounded-2xl p-4 border border-slate-200/70 dark:border-zinc-800 shadow-sm space-y-4 app-card">
           {/* Статус связи */}
           <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-zinc-800/80">
             <div className="flex items-center gap-2.5 min-w-0">
@@ -400,7 +400,7 @@ export default function Home({ meData, onStartSession, onOpenActiveSession, onSt
           type="button"
           onClick={onStartBalance}
           disabled={!couple?.has_partner}
-          className="w-full rounded-2xl border border-violet-200 dark:border-violet-900/70 bg-violet-50/70 dark:bg-violet-950/30 p-4 text-left flex items-center gap-3 disabled:opacity-70"
+          className="w-full rounded-2xl border border-violet-200 dark:border-violet-900/70 bg-violet-50/70 dark:bg-violet-950/30 p-4 text-left flex items-center gap-3 disabled:opacity-70 balance-launch-card app-interactive-card"
         >
           <span className="w-10 h-10 rounded-xl bg-violet-100 dark:bg-violet-900/60 text-violet-600 dark:text-violet-300 flex items-center justify-center shrink-0"><Activity size={20} /></span>
           <span className="min-w-0 flex-1">
@@ -417,7 +417,7 @@ export default function Home({ meData, onStartSession, onOpenActiveSession, onSt
           {latestCompletedSession?.id && (
             <button
               onClick={() => onOpenActiveSession(latestCompletedSession.id)}
-              className="w-full p-4 mb-3 rounded-2xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-900 text-left flex items-center justify-between gap-3"
+              className="w-full p-4 mb-3 rounded-2xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-900 text-left flex items-center justify-between gap-3 app-interactive-card"
             >
               <div>
                 <div className="text-sm font-bold text-emerald-800 dark:text-emerald-200">Разбор готов</div>
@@ -430,7 +430,7 @@ export default function Home({ meData, onStartSession, onOpenActiveSession, onSt
             /* Кнопка возврата к активному разбору */
             <button
               onClick={() => onOpenActiveSession(activeSession.id)}
-              className="w-full p-5 rounded-2xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-white shadow-lg shadow-amber-500/20 active:scale-[0.99] transition-all flex items-center justify-between text-left group"
+              className="w-full p-5 rounded-2xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-white shadow-lg shadow-amber-500/20 active:scale-[0.99] transition-all flex items-center justify-between text-left group app-interactive-card"
             >
               <div>
                 <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-white/20 text-white text-[10px] font-semibold tracking-wider uppercase mb-1">
@@ -451,9 +451,9 @@ export default function Home({ meData, onStartSession, onOpenActiveSession, onSt
             <button
               onClick={handleStartConflict}
               disabled={isStartingConflict}
-              className="w-full p-6 rounded-2xl bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-700 hover:to-violet-700 text-white shadow-xl shadow-indigo-600/25 active:scale-[0.99] transition-all text-center flex flex-col items-center justify-center gap-2 group disabled:opacity-70 disabled:cursor-wait"
+              className="w-full p-6 rounded-2xl bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-700 hover:to-violet-700 text-white shadow-xl shadow-indigo-600/25 active:scale-[0.99] transition-all text-center flex flex-col items-center justify-center gap-2 group disabled:opacity-70 disabled:cursor-wait home-conflict-card"
             >
-              <div className="w-12 h-12 rounded-2xl bg-white/15 flex items-center justify-center text-white backdrop-blur-sm group-hover:scale-105 transition-transform">
+              <div className="w-12 h-12 rounded-2xl bg-white/15 flex items-center justify-center text-white backdrop-blur-sm animate-float-soft home-conflict-icon">
                 <Heart size={26} className="text-white fill-white/20" />
               </div>
               <div>
@@ -485,7 +485,7 @@ export default function Home({ meData, onStartSession, onOpenActiveSession, onSt
             className={`p-3.5 rounded-2xl border text-left transition-all flex flex-col justify-between ${
               whiteFlagSuccess
                 ? 'bg-emerald-50 dark:bg-emerald-950/60 border-emerald-300 dark:border-emerald-800 text-emerald-800 dark:text-emerald-300'
-                : 'bg-white dark:bg-zinc-900 border-slate-200/70 dark:border-zinc-800 hover:bg-slate-50 dark:hover:bg-zinc-800/60 text-slate-800 dark:text-slate-200 shadow-sm'
+                : 'bg-white dark:bg-zinc-900 border-slate-200/70 dark:border-zinc-800 hover:bg-slate-50 dark:hover:bg-zinc-800/60 text-slate-800 dark:text-slate-200 shadow-sm app-interactive-card'
             }`}
           >
             <div className="flex items-center justify-between">
@@ -507,7 +507,7 @@ export default function Home({ meData, onStartSession, onOpenActiveSession, onSt
           {/* Тонкий намёк */}
           <button
             onClick={() => setIsHintOpen(true)}
-            className="p-3.5 rounded-2xl bg-white dark:bg-zinc-900 border border-slate-200/70 dark:border-zinc-800 hover:bg-slate-50 dark:hover:bg-zinc-800/60 text-slate-800 dark:text-slate-200 shadow-sm text-left transition-all flex flex-col justify-between"
+            className="p-3.5 rounded-2xl bg-white dark:bg-zinc-900 border border-slate-200/70 dark:border-zinc-800 hover:bg-slate-50 dark:hover:bg-zinc-800/60 text-slate-800 dark:text-slate-200 shadow-sm text-left transition-all flex flex-col justify-between app-interactive-card"
           >
             <div className="flex items-center justify-between">
               <span className="text-2xl">💡</span>

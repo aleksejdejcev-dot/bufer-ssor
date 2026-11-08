@@ -114,7 +114,7 @@ export default function Onboarding({ onAccepted, initialCouple }) {
   };
 
   return (
-    <div className="min-h-screen flex flex-col justify-between p-5 max-w-md mx-auto animate-fade-in bg-slate-50/50 dark:bg-zinc-950">
+    <div className="min-h-screen flex flex-col justify-between p-5 max-w-md mx-auto animate-fade-in bg-slate-50/50 dark:bg-zinc-950/55">
       <div>
         {/* Шапка и название */}
         <div className="text-center pt-2 pb-5">

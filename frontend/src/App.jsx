@@ -26,22 +26,19 @@ export default function App() {
         WebApp.ready();
         WebApp.expand();
 
-        // Синхронизация темы (светлая/тёмная)
-        const isDark = WebApp.colorScheme === 'dark';
-        if (isDark) {
-          document.documentElement.classList.add('dark');
-        } else {
-          document.documentElement.classList.remove('dark');
-        }
-
-        // Подписка на смену темы в Telegram
-        themeHandler = () => {
-          if (WebApp.colorScheme === 'dark') {
-            document.documentElement.classList.add('dark');
-          } else {
-            document.documentElement.classList.remove('dark');
-          }
+        const syncTheme = () => {
+          const isDark = WebApp.colorScheme === 'dark';
+          const background = isDark ? '#15131b' : '#faf9fc';
+          document.documentElement.classList.toggle('dark', isDark);
+          const themeMeta = document.querySelector('meta[name="theme-color"]');
+          if (themeMeta) themeMeta.setAttribute('content', background);
+          try {
+            WebApp.setHeaderColor?.(background);
+            WebApp.setBackgroundColor?.(background);
+          } catch {}
         };
+        syncTheme();
+        themeHandler = syncTheme;
         WebApp.onEvent('themeChanged', themeHandler);
       }
     } catch (e) {
@@ -109,7 +106,7 @@ export default function App() {
   // Экран загрузки
   if (currentScreen === 'loading') {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center p-6 bg-slate-50/50 dark:bg-zinc-950 text-center animate-fade-in">
+      <div className="min-h-screen flex flex-col items-center justify-center p-6 bg-slate-50/50 dark:bg-zinc-950/55 text-center animate-fade-in">
         <div className="w-12 h-12 rounded-2xl bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 flex items-center justify-center animate-pulse mb-3 shadow-sm">
           <Sparkles size={24} />
         </div>
@@ -126,7 +123,7 @@ export default function App() {
   // Экран ошибки инициализации
   if (currentScreen === 'error') {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center p-6 bg-slate-50/50 dark:bg-zinc-950 text-center animate-fade-in">
+      <div className="min-h-screen flex flex-col items-center justify-center p-6 bg-slate-50/50 dark:bg-zinc-950/55 text-center animate-fade-in">
         <div className="w-12 h-12 rounded-2xl bg-rose-50 dark:bg-rose-950/60 text-rose-600 dark:text-rose-400 flex items-center justify-center mb-3">
           <AlertCircle size={24} />
         </div>

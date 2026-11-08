@@ -143,8 +143,8 @@ export default function Session({ sessionId, onBack }) {
   };
 
   return (
-    <div className="min-h-screen flex flex-col justify-between p-4 sm:p-5 max-w-md mx-auto animate-fade-in bg-slate-50/50 dark:bg-zinc-950">
-      <div className="space-y-4">
+      <div className="min-h-screen flex flex-col justify-between p-4 sm:p-5 max-w-md mx-auto animate-fade-in bg-slate-50/50 dark:bg-zinc-950/55">
+      <div className="space-y-4 app-home-stack">
         {/* Верхняя навигация */}
         <div className="flex items-center justify-between pb-1">
           <button

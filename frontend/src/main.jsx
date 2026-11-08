@@ -4,6 +4,14 @@ import App from './App.jsx';
 import LandingPage from './screens/LandingPage.jsx';
 import './index.css';
 
+// Устанавливаем Telegram-тему до первого React-рендера, чтобы не было вспышки светлой темы.
+if (typeof document !== 'undefined') {
+  document.documentElement.classList.toggle(
+    'dark',
+    window.Telegram?.WebApp?.colorScheme === 'dark',
+  );
+}
+
 // Проверка наличия Telegram WebApp initData для определения окружения
 const isInsideTelegram = Boolean(
   typeof window !== 'undefined' &&

@@ -65,10 +65,10 @@ export default function RelationshipBalance({ sessionId, onBack }) {
   if (loading) return <div className="min-h-screen flex items-center justify-center text-slate-500"><LoaderCircle className="animate-spin mr-2" />Загружаем…</div>;
 
   return (
-    <main className="min-h-screen bg-slate-50 dark:bg-zinc-950 text-slate-900 dark:text-slate-100 px-4 pt-5 pb-10">
-      <div className="max-w-xl mx-auto space-y-5">
+    <main className="min-h-screen bg-slate-50/50 dark:bg-zinc-950/55 text-slate-900 dark:text-slate-100 px-4 pt-5 pb-10">
+      <div className="max-w-xl mx-auto space-y-5 app-home-stack">
         <button onClick={onBack} className="inline-flex items-center gap-2 text-sm text-slate-500"><ArrowLeft size={17} />На главную</button>
-        <header className="rounded-3xl p-6 bg-gradient-to-br from-indigo-600 to-violet-700 text-white shadow-lg">
+        <header className="rounded-3xl p-6 bg-gradient-to-br from-indigo-600 to-violet-700 text-white shadow-lg balance-hero">
           <div className="w-11 h-11 rounded-2xl bg-white/15 flex items-center justify-center mb-3"><Heart size={23} /></div>
           <h1 className="text-2xl font-extrabold">Баланс отношений</h1>
           <p className="mt-2 text-sm text-indigo-100 leading-relaxed">Ответьте каждый отдельно. Партнёр не увидит ваши отдельные ответы — вместе вы получите общий бережный итог и идеи для пары.</p>
