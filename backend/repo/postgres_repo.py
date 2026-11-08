@@ -638,6 +638,37 @@ class PostgresRepo:
                 return _format_row(row)
         return self._run_async(_impl())
 
+    def save_conflict_input(
+        self,
+        session_id: str,
+        author_telegram_id: int,
+        kind: str,
+        payload_encrypted: bytes,
+    ) -> int:
+        async def _impl():
+            pool = await self._get_pool()
+            s_uuid = uuid.UUID(session_id)
+            expires_at = datetime.now(timezone.utc) + timedelta(hours=getattr(settings, "RAW_INPUT_TTL_HOURS", 48))
+            async with pool.acquire() as conn:
+                async with conn.transaction():
+                    # Serialize submissions per conflict so the second distinct answer
+                    # cannot be missed by a concurrent count query.
+                    await conn.fetchval("SELECT pg_advisory_xact_lock(hashtext($1));", session_id)
+                    await conn.execute(
+                        "DELETE FROM pending_inputs WHERE session_id = $1 AND author_telegram_id = $2;",
+                        s_uuid, author_telegram_id,
+                    )
+                    await conn.execute("""
+                        INSERT INTO pending_inputs (session_id, author_telegram_id, kind, payload_encrypted, expires_at)
+                        VALUES ($1, $2, $3, $4, $5);
+                    """, s_uuid, author_telegram_id, kind, payload_encrypted, expires_at)
+                    count = await conn.fetchval(
+                        "SELECT count(DISTINCT author_telegram_id) FROM pending_inputs WHERE session_id = $1;",
+                        s_uuid,
+                    )
+                    return int(count or 0)
+        return self._run_async(_impl())
+
     def has_user_submitted_input(self, session_id: str, author_telegram_id: int) -> bool:
         async def _impl():
             pool = await self._get_pool()

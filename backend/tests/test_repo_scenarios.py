@@ -107,6 +107,23 @@ def test_repo_session_and_pending_inputs(repo):
     assert p1_inp["kind"] == "text"
 
 
+def test_repo_final_conflict_inputs_replace_drafts_and_count_unique_authors(repo):
+    repo.upsert_user(1211, "Партнер А")
+    repo.upsert_user(1212, "Партнер Б")
+    couple = repo.create_couple(1211, "INV-1211")
+    repo.join_couple(couple["id"], 1212)
+    session = repo.create_conflict_session(couple["id"], 1211)
+
+    assert repo.save_conflict_input(session["id"], 1211, "text", b"draft") == 1
+    assert repo.save_conflict_input(session["id"], 1211, "text", b"final") == 1
+    assert repo.save_conflict_input(session["id"], 1212, "text", b"partner") == 2
+
+    inputs = repo.get_pending_inputs(session["id"])
+    assert len(inputs) == 2
+    first = next(item for item in inputs if item["author_telegram_id"] == 1211)
+    assert first["payload_encrypted"] == b"final"
+
+
 def test_repo_save_analysis_results_transaction(repo):
     """Сценарий 3: Атомарная транзакция сохранения результатов и очистки pending_inputs."""
     repo.upsert_user(1301, "Партнер А")

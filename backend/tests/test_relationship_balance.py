@@ -80,3 +80,30 @@ def test_relationship_balance_rejects_invalid_scale_values(balance_pair, monkeyp
         json={"answers": [1, 2, 3, 4, 5, 9]},
     )
     assert response.status_code == 422
+
+
+def test_relationship_balance_start_notifies_partner_once_with_initiator_name(balance_pair, monkeypatch):
+    _repo, p1, p2, _couple = balance_pair
+    current_user = {"value": p1}
+    app.dependency_overrides[require_legal_accepted] = lambda: current_user["value"]
+    notifications = []
+
+    def notify(partner_id, initiator_name):
+        notifications.append((partner_id, initiator_name))
+
+        async def done():
+            return None
+
+        return done()
+
+    monkeypatch.setattr("main.notify_balance_partner_prompt", notify)
+    monkeypatch.setattr("main.asyncio.create_task", lambda coroutine: coroutine.close())
+    client = TestClient(app)
+
+    first = client.post("/relationship-balance/start")
+    current_user["value"] = p2
+    second = client.post("/relationship-balance/start")
+
+    assert first.status_code == second.status_code == 200
+    assert first.json()["id"] == second.json()["id"]
+    assert notifications == [(p2["telegram_id"], p1["first_name"])]

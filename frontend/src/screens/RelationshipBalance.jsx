@@ -79,11 +79,11 @@ export default function RelationshipBalance({ sessionId, onBack }) {
         {session?.status === 'completed' && session.result ? (
           <section className="space-y-4">
             <div className="rounded-2xl border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5 text-center">
-              <div className="text-xs font-semibold uppercase tracking-widest text-indigo-500">Ваш общий ориентир</div>
+              <div className="text-xs font-semibold uppercase tracking-widest text-indigo-500">Общий баланс</div>
               <div className="text-5xl font-black mt-2">{session.result.score}<span className="text-xl text-slate-400">/100</span></div>
               <div className="font-bold mt-2">{session.result.label}</div>
               <p className="text-sm text-slate-600 dark:text-slate-300 mt-3 leading-relaxed">{session.result.summary}</p>
-              <p className="text-[11px] text-slate-400 mt-3">Это повод для разговора, а не оценка качества или совместимости пары.</p>
+              <p className="text-[11px] text-slate-400 mt-3">Шкала показывает ваши ответы сегодня — это ориентир для спокойного разговора, не оценка пары.</p>
             </div>
             <div className="rounded-2xl border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5 space-y-3">
               <h2 className="font-bold text-sm">Темы для общего внимания</h2>
@@ -93,9 +93,9 @@ export default function RelationshipBalance({ sessionId, onBack }) {
               </div>)}
             </div>
             <div className="rounded-2xl border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5">
-              <h2 className="font-bold flex items-center gap-2"><Sparkles size={17} className="text-violet-500" />Небольшие шаги</h2>
+              <h2 className="font-bold flex items-center gap-2"><Sparkles size={17} className="text-violet-500" />Что можно попробовать</h2>
               <ul className="mt-3 space-y-3 text-sm text-slate-700 dark:text-slate-300">{session.result.tips?.map((tip, i) => <li key={i} className="flex gap-2"><span className="text-indigo-500">•</span>{tip}</li>)}</ul>
-              <div className="mt-4 rounded-xl bg-indigo-50 dark:bg-indigo-950/40 p-3 text-sm"><b>Идея для вас:</b> {session.result.activity_idea}</div>
+              <div className="mt-4 rounded-xl bg-indigo-50 dark:bg-indigo-950/40 p-3 text-sm"><b>Идея для вас двоих:</b> {session.result.activity_idea}</div>
             </div>
             <button onClick={finish} disabled={session.finish_confirmed_by_me} className="w-full rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-400 text-white py-3 font-semibold inline-flex items-center justify-center gap-2"><Check size={18} />{session.finish_confirmed_by_me ? 'Ожидаем подтверждение партнёра' : 'Завершить баланс'}</button>
             <p className="text-center text-xs text-slate-400">Результат удалится после подтверждения обоих или автоматически через 48 часов.</p>

@@ -19,9 +19,11 @@ from aiogram.types import User, Chat, Message, Voice
 from aiogram.filters import CommandObject
 
 import db
+import bot as bot_module
 from bot import (
     handle_start,
     handle_conflict_input,
+    notify_balance_partner_prompt,
     send_white_flag,
     send_hint_message,
     handle_support_command,
@@ -124,6 +126,44 @@ async def test_bot_voice_input_exceeds_duration(mock_message, monkeypatch):
     assert msg.answer.called
     answer_text = msg.answer.call_args[0][0]
     assert "слишком длинное" in answer_text
+
+
+@pytest.mark.asyncio
+async def test_duplicate_conflict_answer_recovers_stuck_session_when_both_inputs_exist(mock_message, monkeypatch):
+    session = {"id": "session-race", "status": "waiting_partner_2"}
+    couple = {"id": "couple-race", "partner_1_id": 101, "partner_2_id": 102}
+    monkeypatch.setattr(db, "check_rate_limit", MagicMock(return_value=(True, 0)))
+    monkeypatch.setattr(db, "get_user", MagicMock(return_value={"accepted_legal_at": "accepted", "first_name": "Иван"}))
+    monkeypatch.setattr(db, "get_user_couple", MagicMock(return_value=couple))
+    monkeypatch.setattr(db, "get_active_session", MagicMock(return_value=session))
+    monkeypatch.setattr(db, "has_user_submitted_input", MagicMock(return_value=True))
+    status_mock = MagicMock()
+    monkeypatch.setattr(db, "update_session_status", status_mock)
+    send_mock = AsyncMock()
+    monkeypatch.setattr(bot_module.bot, "send_message", send_mock)
+    monkeypatch.setattr(bot_module.asyncio, "create_task", lambda coroutine: coroutine.close())
+
+    msg = mock_message(text="Мой повторный ответ", user_id=101, first_name="Иван")
+    await handle_conflict_input(msg)
+
+    status_mock.assert_called_once_with("session-race", status="analyzing")
+    assert "оба поделились" in msg.answer.call_args.args[0].lower()
+    send_mock.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_balance_prompt_explains_private_questions_and_next_step(monkeypatch):
+    send_mock = AsyncMock()
+    monkeypatch.setattr(bot_module.bot, "send_message", send_mock)
+
+    await notify_balance_partner_prompt(102, "Алексей")
+
+    send_mock.assert_awaited_once()
+    message = send_mock.await_args.kwargs["text"]
+    assert "Алексей приглашает" in message
+    assert "6 вопросов" in message
+    assert "партнёр не увидит ваши ответы" in message
+    assert "нажмите «Баланс отношений»" in message
 
 
 @pytest.mark.asyncio

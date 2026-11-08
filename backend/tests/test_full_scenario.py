@@ -261,6 +261,18 @@ def patch_db(monkeypatch):
         mem_db.pending_inputs[p_id] = item
         return item
 
+    def mock_save_conflict_input(session_id: str, author_telegram_id: int, kind: str, payload_encrypted: bytes):
+        for p_id in list(mem_db.pending_inputs):
+            item = mem_db.pending_inputs[p_id]
+            if item["session_id"] == session_id and item["author_telegram_id"] == author_telegram_id:
+                del mem_db.pending_inputs[p_id]
+        mock_save_pending_input(session_id, author_telegram_id, kind, payload_encrypted)
+        return len({
+            item["author_telegram_id"]
+            for item in mem_db.pending_inputs.values()
+            if item["session_id"] == session_id
+        })
+
     def mock_has_user_submitted(session_id: str, author_telegram_id: int):
         for item in mem_db.pending_inputs.values():
             if item["session_id"] == session_id and item["author_telegram_id"] == author_telegram_id:
@@ -289,11 +301,13 @@ def patch_db(monkeypatch):
     monkeypatch.setattr(db, "update_mood", mock_update_mood)
     monkeypatch.setattr(db, "delete_couple_data", mock_delete_couple_data)
     monkeypatch.setattr(db, "get_active_session", mock_get_active_session)
+    monkeypatch.setattr(db, "get_latest_completed_session", lambda couple_id: None)
     monkeypatch.setattr(db, "get_session_by_id", mock_get_session_by_id)
     monkeypatch.setattr(db, "create_conflict_session", mock_create_conflict_session)
     monkeypatch.setattr(db, "create_conflict_session_with_access", mock_create_conflict_session_with_access)
     monkeypatch.setattr(db, "update_session_status", mock_update_session_status)
     monkeypatch.setattr(db, "save_pending_input", mock_save_pending_input)
+    monkeypatch.setattr(db, "save_conflict_input", mock_save_conflict_input)
     monkeypatch.setattr(db, "has_user_submitted_input", mock_has_user_submitted)
     monkeypatch.setattr(db, "count_pending_inputs", mock_count_pending)
     monkeypatch.setattr(db, "delete_pending_inputs_for_session", mock_delete_pending)

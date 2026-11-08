@@ -467,6 +467,27 @@ CLARIFICATION_REQUESTED: Dict[str, bool] = {}
 CLARIFICATION_SAVED_TEXT: Dict[str, str] = {}
 
 
+async def _kick_off_conflict_analysis(message: Message, session_id: str, other_id: int, first_name: str) -> None:
+    """Switch the conflict to analysis and notify both participants exactly once at the UI level."""
+    db.update_session_status(session_id, status="analyzing")
+    await message.answer(
+        "Твоя позиция принята 🔒\n\n"
+        "Вы оба поделились своими версиями. ИИ-медиатор готовит разбор — результат появится в приложении."
+    )
+    try:
+        await bot.send_message(
+            chat_id=other_id,
+            text=(
+                f"{first_name} тоже поделился(-ась) своей версией.\n\n"
+                "Обе версии получены. ИИ-медиатор готовит разбор — результат появится в приложении."
+            ),
+            reply_markup=get_miniapp_keyboard(),
+        )
+    except Exception as e:
+        logger.warning("Не удалось уведомить партнера о начале анализа: %s", e)
+    asyncio.create_task(analyze_session(session_id))
+
+
 @router.message(F.voice | F.text)
 async def handle_conflict_input(message: Message):
     telegram_id = message.from_user.id
@@ -514,9 +535,10 @@ async def handle_conflict_input(message: Message):
         return
 
     session_id = session["id"]
+    other_id = couple["partner_2_id"] if telegram_id == couple["partner_1_id"] else couple["partner_1_id"]
 
-    # 3. Если статус analyzing — анализ уже идет
-    if session["status"] == "analyzing":
+    # 3. Если анализ уже запущен — не просим партнера повторять ответ.
+    if session["status"] in ("analyzing", "processing"):
         await message.answer(
             "Обе версии уже получены! ИИ-медиатор прямо сейчас анализирует ситуацию. "
             "Пожалуйста, подождите завершения — результат скоро появится в приложении.",
@@ -526,8 +548,16 @@ async def handle_conflict_input(message: Message):
 
     # 4. Проверяем, не отправлял ли уже этот пользователь свою версию
     if db.has_user_submitted_input(session_id, telegram_id):
+        # Восстанавливаем сессию, если оба ответа сохранились, но старый
+        # параллельный подсчёт оставил ее в waiting_partner_2.
+        if (
+            session["status"] == "waiting_partner_2"
+            and db.has_user_submitted_input(session_id, other_id)
+        ):
+            await _kick_off_conflict_analysis(message, session_id, other_id, first_name)
+            return
+
         # Находим имя второго партнера
-        other_id = couple["partner_2_id"] if telegram_id == couple["partner_1_id"] else couple["partner_1_id"]
         other_user = db.get_user(other_id)
         other_name = other_user["first_name"] if other_user else "партнера"
 
@@ -601,14 +631,9 @@ async def handle_conflict_input(message: Message):
         CLARIFICATION_REQUESTED[clarification_key] = True
         if message.text:
             CLARIFICATION_SAVED_TEXT[clarification_key] = message.text
-        # Сохраняем черновик в pending_inputs
-        db.save_pending_input(
-            session_id=session_id,
-            author_telegram_id=telegram_id,
-            kind=kind,
-            payload_encrypted=encrypted_payload,
-        )
-        logger.info("Sent clarifying question for short version: session=%s, user=%s", session_id, telegram_id)
+        # Короткий черновик не считаем отправленной версией и не пишем в БД.
+        # Это не даст повторному сообщению ошибочно считаться дубликатом ответа.
+        logger.info("Requested clarification for short version: session=%s, user=%s", session_id, telegram_id)
         await message.answer("Расскажи чуть подробнее: что именно произошло и чего ты хотел(а) в тот момент?")
         return
 
@@ -623,8 +648,10 @@ async def handle_conflict_input(message: Message):
         db.delete_pending_input_for_author(session_id, telegram_id)
         CLARIFICATION_SAVED_TEXT.pop(clarification_key, None)
 
+    CLARIFICATION_REQUESTED.pop(clarification_key, None)
+
     # 6. Сохраняем зашифрованные данные в pending_inputs
-    db.save_pending_input(
+    inputs_count = db.save_conflict_input(
         session_id=session_id,
         author_telegram_id=telegram_id,
         kind=kind,
@@ -633,11 +660,8 @@ async def handle_conflict_input(message: Message):
     logger.info("Saved encrypted pending_input for session_id=%s, kind=%s", session_id, kind)
 
     # 7. Определяем партнеров и статус
-    other_id = couple["partner_2_id"] if telegram_id == couple["partner_1_id"] else couple["partner_1_id"]
     other_user = db.get_user(other_id)
     other_name = other_user["first_name"] if other_user else "Партнер"
-
-    inputs_count = db.count_pending_inputs(session_id)
 
     if inputs_count == 1:
         # Первый партнер ответил — подтверждаем ему и пушим второго
@@ -649,33 +673,7 @@ async def handle_conflict_input(message: Message):
 
     elif inputs_count >= 2:
         # Оба партнера ответили — переводим статус в analyzing
-        db.update_session_status(session_id, status="analyzing")
-
-        # Оповещаем текущего (второго) партнера
-        await message.answer(
-            "Твоя позиция принята и надежно зашифрована 🔒\n\n"
-            "Обе версии получены! ИИ-медиатор начинает конфиденциальный анализ. "
-            "Скоро пришлём уведомление о готовности разбора ⏳",
-            reply_markup=get_miniapp_keyboard(),
-        )
-
-        # Оповещаем первого партнера
-        try:
-            await bot.send_message(
-                chat_id=other_id,
-                text=(
-                    f"<b>{first_name}</b> поделился(-ась) своей версией.\n\n"
-                    "Обе версии получены! ИИ-медиатор начинает конфиденциальный анализ. "
-                    "Скоро пришлём уведомление о готовности разбора ⏳"
-                ),
-                parse_mode=ParseMode.HTML,
-                reply_markup=get_miniapp_keyboard(),
-            )
-        except Exception as e:
-            logger.warning("Не удалось оповестить первого партнера о начале анализа: %s", e)
-
-        # Запускаем анализ (на данном этапе — асинхронная заглушка)
-        asyncio.create_task(analyze_session(session_id))
+        await _kick_off_conflict_analysis(message, session_id, other_id, first_name)
 
 
 # ==============================================================================
@@ -730,15 +728,16 @@ async def notify_conflict_partner_prompt(partner_id: int, initiator_name: str):
         logger.warning("Не удалось отправить приглашение ко второму мнению (%s): %s", partner_id, e)
 
 
-async def notify_balance_partner_prompt(partner_id: int):
+async def notify_balance_partner_prompt(partner_id: int, initiator_name: Optional[str] = None):
     """Приглашает партнёра пройти свою часть добровольного баланса отношений."""
     try:
         await bot.send_message(
             chat_id=partner_id,
             text=(
-                "💜 В Буфере Ссор появился добровольный «Баланс отношений».\n\n"
-                "Ответьте на несколько коротких вопросов отдельно от партнёра — после этого "
-                "вы вместе получите бережный итог и идеи для совместного времени."
+                f"💜 {initiator_name or 'Ваш партнёр'} приглашает пройти «Баланс отношений».\n\n"
+                "Это короткий чек-ин из 6 вопросов: вы ответите отдельно, и партнёр не увидит ваши ответы. "
+                "Когда вы оба закончите, появятся общий короткий итог и одна идея для совместного времени.\n\n"
+                "Когда будет удобно, откройте приложение и нажмите «Баланс отношений»."
             ),
             reply_markup=get_miniapp_keyboard(),
         )

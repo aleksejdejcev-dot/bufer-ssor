@@ -860,7 +860,9 @@ async def start_relationship_balance(user: dict = Depends(require_legal_accepted
     is_p1 = user["telegram_id"] == couple["partner_1_id"]
     if session.get("created"):
         partner_id = couple["partner_2_id"] if is_p1 else couple["partner_1_id"]
-        asyncio.create_task(notify_balance_partner_prompt(partner_id))
+        asyncio.create_task(
+            notify_balance_partner_prompt(partner_id, user.get("first_name") or "Ваш партнёр")
+        )
     return {"id": session["id"], "status": session["status"],
             "answered": bool(session.get("answers_p1" if is_p1 else "answers_p2"))}
 

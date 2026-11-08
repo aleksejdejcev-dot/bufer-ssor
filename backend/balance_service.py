@@ -12,28 +12,30 @@ logger = logging.getLogger("relationship_balance")
 
 
 class BalanceAdvice(BaseModel):
-    summary: str = Field(..., min_length=20, max_length=600)
+    summary: str = Field(..., min_length=20, max_length=320)
     tips: List[str] = Field(..., min_length=2, max_length=3)
-    activity_idea: str = Field(..., min_length=10, max_length=240)
+    activity_idea: str = Field(..., min_length=10, max_length=140)
 
 
 async def analyze_balance(answers_1: List[int], answers_2: List[int]) -> dict:
     """Interpret only paired 1–5 ratings; never receive free text or identity data."""
     means = [round((a + b) / 2, 1) for a, b in zip(answers_1, answers_2)]
     score = round(sum(means) / len(means) * 20)
-    spread = max(abs(a - b) for a, b in zip(answers_1, answers_2))
-    content = (
-        f"Средние оценки пары по шести темам (1–5): {means}. "
-        f"Разница максимальных ответов партнёров по одному вопросу: {spread} из 4. "
-        f"Общий ориентировочный индекс: {score}/100."
+    dimensions = ["разговоры", "понимание", "время вместе", "поддержка", "общие дела", "тепло и нежность"]
+    options = ["почти никогда", "редко", "иногда", "часто", "почти всегда"]
+    content = "\n".join(
+        f"{dimension.capitalize()}: ваш ответ — {options[a - 1]}; ответ партнёра — {options[b - 1]}."
+        for dimension, a, b in zip(dimensions, answers_1, answers_2)
     )
     prompt = (
         "Ты бережный помощник для отношений, не психолог и не диагност. "
-        "По агрегированным оценкам пары напиши нейтральное общее наблюдение, 2–3 "
-        "маленьких выполнимых совета и одну идею совместного занятия. Не обвиняй, "
-        "не делай выводов о любви, совместимости, диагнозах или безопасности; "
-        "не трактуй балл как научный тест. Если оценки расходятся, предложи спокойно "
-        "обсудить разные ожидания. Ответы обоих равноправны. Пиши по-русски, просто и тепло."
+        "Сформулируй короткий и понятный общий вывод по ответам: 1–2 предложения и не больше 280 знаков, без разбора "
+        "каждого вопроса по отдельности. Затем дай ровно 2 простых совета — по одному короткому "
+        "предложению каждый — и одну короткую идею занятия для пары. Не упоминай числа, баллы, "
+        "оценки, шкалы, средние значения и не сравнивай, кто ответил выше или ниже. Не превращай "
+        "ответы в правила вида «если ответ такой, сделайте это». Не обвиняй и не делай выводов "
+        "о любви, совместимости, диагнозах или безопасности. Ответы обоих равноправны. "
+        "Пиши по-русски, естественно и тепло; не повторяй формулировки вопросов."
     )
     provider = get_provider()
     parsed, meta = await asyncio.wait_for(
@@ -43,7 +45,7 @@ async def analyze_balance(answers_1: List[int], answers_2: List[int]) -> dict:
             json_schema=BalanceAdvice.model_json_schema(),
             pydantic_model=BalanceAdvice,
             temperature=0.4,
-            max_tokens=700,
+        max_tokens=440,
             tag="relationship_balance",
         ),
         timeout=60,
@@ -55,7 +57,7 @@ async def analyze_balance(answers_1: List[int], answers_2: List[int]) -> dict:
         "score": score,
         "label": "Есть хорошая опора" if score >= 75 else "Есть темы для внимания" if score >= 55 else "Парам сейчас может быть непросто",
         "summary": parsed.summary,
-        "tips": parsed.tips,
+        "tips": parsed.tips[:2],
         "activity_idea": parsed.activity_idea,
         "dimension_scores": means,
     }

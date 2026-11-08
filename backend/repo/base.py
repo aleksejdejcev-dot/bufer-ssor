@@ -131,6 +131,16 @@ class Repository(Protocol):
     ) -> Dict[str, Any]:
         ...
 
+    def save_conflict_input(
+        self,
+        session_id: str,
+        author_telegram_id: int,
+        kind: str,
+        payload_encrypted: bytes,
+    ) -> int:
+        """Atomically replace a participant's final answer and return distinct submitters."""
+        ...
+
     def has_user_submitted_input(self, session_id: str, author_telegram_id: int) -> bool:
         ...
 

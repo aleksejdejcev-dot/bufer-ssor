@@ -154,6 +154,15 @@ def save_pending_input(
     return get_repo().save_pending_input(session_id, author_telegram_id, kind, payload_encrypted)
 
 
+def save_conflict_input(
+    session_id: str,
+    author_telegram_id: int,
+    kind: str,
+    payload_encrypted: bytes,
+) -> int:
+    return get_repo().save_conflict_input(session_id, author_telegram_id, kind, payload_encrypted)
+
+
 def has_user_submitted_input(session_id: str, author_telegram_id: int) -> bool:
     return get_repo().has_user_submitted_input(session_id, author_telegram_id)
 

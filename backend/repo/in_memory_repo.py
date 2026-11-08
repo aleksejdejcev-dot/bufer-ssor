@@ -363,6 +363,22 @@ class InMemoryRepo:
         self.pending_inputs[p_id] = item
         return item
 
+    def save_conflict_input(
+        self,
+        session_id: str,
+        author_telegram_id: int,
+        kind: str,
+        payload_encrypted: bytes,
+    ) -> int:
+        with self._session_lock:
+            self.delete_pending_input_for_author(session_id, author_telegram_id)
+            self.save_pending_input(session_id, author_telegram_id, kind, payload_encrypted)
+            return len({
+                item["author_telegram_id"]
+                for item in self.pending_inputs.values()
+                if item.get("session_id") == session_id
+            })
+
     def has_user_submitted_input(self, session_id: str, author_telegram_id: int) -> bool:
         return any(
             p.get("session_id") == session_id and p.get("author_telegram_id") == author_telegram_id
