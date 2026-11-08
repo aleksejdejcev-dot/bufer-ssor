@@ -730,6 +730,33 @@ async def notify_conflict_partner_prompt(partner_id: int, initiator_name: str):
         logger.warning("Не удалось отправить приглашение ко второму мнению (%s): %s", partner_id, e)
 
 
+async def notify_balance_partner_prompt(partner_id: int):
+    """Приглашает партнёра пройти свою часть добровольного баланса отношений."""
+    try:
+        await bot.send_message(
+            chat_id=partner_id,
+            text=(
+                "💜 В Буфере Ссор появился добровольный «Баланс отношений».\n\n"
+                "Ответьте на несколько коротких вопросов отдельно от партнёра — после этого "
+                "вы вместе получите бережный итог и идеи для совместного времени."
+            ),
+            reply_markup=get_miniapp_keyboard(),
+        )
+    except Exception as e:
+        logger.warning("Не удалось пригласить партнёра пройти баланс (%s): %s", partner_id, e)
+
+
+async def notify_balance_ready(partner_id: int):
+    try:
+        await bot.send_message(
+            chat_id=partner_id,
+            text="✨ Общий результат «Баланса отношений» готов. Откройте приложение и нажмите карточку «Баланс отношений», чтобы посмотреть итог и идеи для пары.",
+            reply_markup=get_miniapp_keyboard(),
+        )
+    except Exception as e:
+        logger.warning("Не удалось отправить уведомление о готовом балансе (%s): %s", partner_id, e)
+
+
 async def send_white_flag(to_telegram_id: int):
     """Отправка сигнала «Белый флаг»"""
     await bot.send_message(

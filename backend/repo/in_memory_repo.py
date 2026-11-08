@@ -24,6 +24,7 @@ class InMemoryRepo:
         self.advisory_locks: set[int] = set()
         self.deletions_log: List[Dict[str, Any]] = []
         self.conflict_finish_confirmations: Dict[str, set[int]] = {}
+        self.relationship_balance_sessions: Dict[str, Dict[str, Any]] = {}
 
     def reset_state(self) -> None:
         self.users.clear()
@@ -36,6 +37,7 @@ class InMemoryRepo:
         self.advisory_locks.clear()
         self.deletions_log.clear()
         self.conflict_finish_confirmations.clear()
+        self.relationship_balance_sessions.clear()
         self.payments.clear()
         self.rate_limiter.clear()
 
@@ -421,6 +423,9 @@ class InMemoryRepo:
                 del self.pending_inputs[pid]
         for sid in s_ids:
             del self.conflict_sessions[sid]
+        for sid, row in list(self.relationship_balance_sessions.items()):
+            if row.get("couple_id") == couple_id:
+                self.relationship_balance_sessions.pop(sid, None)
         couple = self.couples.get(couple_id)
         if couple:
             couple["mood_p1"] = None
@@ -483,6 +488,9 @@ class InMemoryRepo:
                 del self.pending_inputs[pid]
         for sid in s_ids:
             del self.conflict_sessions[sid]
+        for sid, row in list(self.relationship_balance_sessions.items()):
+            if row.get("couple_id") == couple_id:
+                self.relationship_balance_sessions.pop(sid, None)
 
         # 2. Удаляем пару
         if couple_id in self.couples:
@@ -790,4 +798,74 @@ class InMemoryRepo:
             self._advisory_locks.remove(lock_id)
             return True
         return False
+
+    def start_relationship_balance(self, couple_id: str) -> Dict[str, Any]:
+        latest_completed = None
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=48)
+        for row in self.relationship_balance_sessions.values():
+            if row["couple_id"] == couple_id and row["status"] in ("collecting", "analyzing"):
+                return {**row, "created": False}
+            if row["couple_id"] == couple_id and row["status"] == "completed":
+                completed_at = datetime.fromisoformat(row["completed_at"])
+                if completed_at > cutoff and (latest_completed is None or completed_at > datetime.fromisoformat(latest_completed["completed_at"])):
+                    latest_completed = row
+        if latest_completed:
+            return {**latest_completed, "created": False}
+        row = {"id": str(uuid.uuid4()), "couple_id": couple_id, "status": "collecting",
+               "answers_p1": None, "answers_p2": None, "result": None,
+               "finish_confirmed_by_p1": False, "finish_confirmed_by_p2": False,
+               "created_at": datetime.now(timezone.utc).isoformat(), "completed_at": None}
+        self.relationship_balance_sessions[row["id"]] = row
+        return {**row, "created": True}
+
+    def get_relationship_balance(self, session_id: str) -> Optional[Dict[str, Any]]:
+        return self.relationship_balance_sessions.get(session_id)
+
+    def submit_relationship_balance(self, session_id: str, is_partner_1: bool, encrypted_answers: bytes) -> Dict[str, Any]:
+        row = self.relationship_balance_sessions[session_id]
+        row["answers_p1" if is_partner_1 else "answers_p2"] = encrypted_answers
+        return row
+
+    def complete_relationship_balance(self, session_id: str, result: Dict[str, Any]) -> None:
+        row = self.relationship_balance_sessions.get(session_id)
+        if row:
+            row.update(status="completed", result=result, answers_p1=None, answers_p2=None,
+                       completed_at=datetime.now(timezone.utc).isoformat())
+
+    def claim_relationship_balance_analysis(self, session_id: str) -> bool:
+        row = self.relationship_balance_sessions.get(session_id)
+        if not row or row["status"] != "collecting" or not row.get("answers_p1") or not row.get("answers_p2"):
+            return False
+        row["status"] = "analyzing"
+        return True
+
+    def reset_relationship_balance_analysis(self, session_id: str) -> None:
+        row = self.relationship_balance_sessions.get(session_id)
+        if row and row["status"] == "analyzing":
+            row["status"] = "collecting"
+
+    def confirm_relationship_balance_finished(self, session_id: str, telegram_id: int) -> bool:
+        row = self.relationship_balance_sessions.get(session_id)
+        if not row or row["status"] != "completed":
+            return False
+        couple = self.couples.get(row["couple_id"])
+        if not couple or telegram_id not in (couple["partner_1_id"], couple.get("partner_2_id")):
+            return False
+        key = "finish_confirmed_by_p1" if telegram_id == couple["partner_1_id"] else "finish_confirmed_by_p2"
+        row[key] = True
+        if row["finish_confirmed_by_p1"] and row["finish_confirmed_by_p2"]:
+            self.relationship_balance_sessions.pop(session_id, None)
+            return True
+        return False
+
+    def purge_expired_relationship_balances(self, ttl_hours: int = 48) -> int:
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=ttl_hours)
+        doomed = []
+        for sid, row in self.relationship_balance_sessions.items():
+            timestamp = row.get("completed_at") or row["created_at"]
+            if datetime.fromisoformat(timestamp) <= cutoff:
+                doomed.append(sid)
+        for sid in doomed:
+            self.relationship_balance_sessions.pop(sid, None)
+        return len(doomed)
 

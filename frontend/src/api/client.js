@@ -138,6 +138,25 @@ export const api = {
     });
   },
 
+  async startRelationshipBalance() {
+    return request('/relationship-balance/start', { method: 'POST' });
+  },
+
+  async getRelationshipBalance(sessionId) {
+    return request(`/relationship-balance/${sessionId}`, { method: 'GET' });
+  },
+
+  async submitRelationshipBalance(sessionId, answers) {
+    return request(`/relationship-balance/${sessionId}/answer`, {
+      method: 'POST',
+      body: JSON.stringify({ answers }),
+    });
+  },
+
+  async finishRelationshipBalance(sessionId) {
+    return request(`/relationship-balance/${sessionId}/finish`, { method: 'POST' });
+  },
+
   /**
    * Удаляет пару, профили и данные разборов; финансовые записи и личная подписка плательщика сохраняются отдельно.
    */

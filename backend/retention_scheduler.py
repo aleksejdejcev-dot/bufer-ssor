@@ -103,6 +103,7 @@ def run_retention_cycle(
         purged_invites = clean_expired_invites(repo, ttl_hours=invite_ttl_hours)
         purged_payments = clean_expired_payments(repo, retention_years=payment_retention_years)
         purged_waiting = clean_waiting_sessions(repo)
+        purged_balances = repo.purge_expired_relationship_balances(ttl_hours=48)
 
         return {
             "status": "completed",
@@ -113,6 +114,7 @@ def run_retention_cycle(
             "purged_invites": purged_invites,
             "purged_payments": purged_payments,
             "purged_waiting": purged_waiting,
+            "purged_balances": purged_balances,
         }
     finally:
         repo.release_advisory_lock(RETENTION_ADVISORY_LOCK_ID)

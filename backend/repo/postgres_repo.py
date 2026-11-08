@@ -37,7 +37,7 @@ def _format_row(row: Optional[asyncpg.Record]) -> Optional[Dict[str, Any]]:
             d[k] = float(v)
         elif isinstance(v, bytes):
             d[k] = bytes(v)
-        elif isinstance(v, str) and (k.startswith("ai_advice") or k == "shared_summary"):
+        elif isinstance(v, str) and (k.startswith("ai_advice") or k in ("shared_summary", "result")):
             try:
                 d[k] = json.loads(v)
             except Exception:
@@ -717,6 +717,7 @@ class PostgresRepo:
                         WHERE session_id IN (SELECT id FROM conflict_sessions WHERE couple_id = $1);
                     """, c_uuid)
                     await conn.execute("DELETE FROM conflict_sessions WHERE couple_id = $1;", c_uuid)
+                    await conn.execute("DELETE FROM relationship_balance_sessions WHERE couple_id = $1;", c_uuid)
         self._run_async(_impl())
 
     def purge_expired_data(self, days_retention: int = 2, hours_raw_ttl: int = 48) -> Dict[str, int]:
@@ -1134,6 +1135,119 @@ class PostgresRepo:
                 return bool(val)
             finally:
                 await pool.release(conn)
+        return self._run_async(_impl())
+
+    def start_relationship_balance(self, couple_id: str) -> Dict[str, Any]:
+        async def _impl():
+            pool = await self._get_pool()
+            async with pool.acquire() as conn:
+                async with conn.transaction():
+                    await conn.fetchval("SELECT pg_advisory_xact_lock(hashtext($1));", couple_id)
+                    row = await conn.fetchrow("""
+                        SELECT * FROM relationship_balance_sessions
+                        WHERE couple_id = $1 AND (
+                            (status IN ('collecting', 'analyzing') AND created_at > now() - interval '48 hours') OR
+                            (status = 'completed' AND completed_at > now() - interval '48 hours')
+                        )
+                        ORDER BY CASE WHEN status IN ('collecting', 'analyzing') THEN 0 ELSE 1 END,
+                                 COALESCE(completed_at, created_at) DESC
+                        LIMIT 1;
+                    """, uuid.UUID(couple_id))
+                    if row:
+                        return {**_format_row(row), "created": False}
+                    row = await conn.fetchrow("""
+                        INSERT INTO relationship_balance_sessions (couple_id)
+                        VALUES ($1) RETURNING *;
+                    """, uuid.UUID(couple_id))
+                    return {**_format_row(row), "created": True}
+        return self._run_async(_impl())
+
+    def get_relationship_balance(self, session_id: str) -> Optional[Dict[str, Any]]:
+        async def _impl():
+            pool = await self._get_pool()
+            async with pool.acquire() as conn:
+                row = await conn.fetchrow("SELECT * FROM relationship_balance_sessions WHERE id = $1;", uuid.UUID(session_id))
+                return _format_row(row)
+        return self._run_async(_impl())
+
+    def submit_relationship_balance(self, session_id: str, is_partner_1: bool, encrypted_answers: bytes) -> Dict[str, Any]:
+        async def _impl():
+            pool = await self._get_pool()
+            column = "answers_p1" if is_partner_1 else "answers_p2"
+            async with pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    f"UPDATE relationship_balance_sessions SET {column} = $2 WHERE id = $1 AND status = 'collecting' RETURNING *;",
+                    uuid.UUID(session_id), encrypted_answers,
+                )
+                return _format_row(row) if row else None
+        return self._run_async(_impl())
+
+    def complete_relationship_balance(self, session_id: str, result: Dict[str, Any]) -> None:
+        async def _impl():
+            pool = await self._get_pool()
+            async with pool.acquire() as conn:
+                await conn.execute("""
+                    UPDATE relationship_balance_sessions
+                    SET status = 'completed', result = $2::jsonb, answers_p1 = NULL, answers_p2 = NULL,
+                        completed_at = now()
+                    WHERE id = $1 AND status = 'analyzing';
+                """, uuid.UUID(session_id), json.dumps(result, ensure_ascii=False))
+        self._run_async(_impl())
+
+    def claim_relationship_balance_analysis(self, session_id: str) -> bool:
+        async def _impl():
+            pool = await self._get_pool()
+            async with pool.acquire() as conn:
+                result = await conn.execute("""
+                    UPDATE relationship_balance_sessions SET status = 'analyzing'
+                    WHERE id = $1 AND status = 'collecting' AND answers_p1 IS NOT NULL AND answers_p2 IS NOT NULL;
+                """, uuid.UUID(session_id))
+                return result.endswith("1")
+        return self._run_async(_impl())
+
+    def reset_relationship_balance_analysis(self, session_id: str) -> None:
+        async def _impl():
+            pool = await self._get_pool()
+            async with pool.acquire() as conn:
+                await conn.execute("UPDATE relationship_balance_sessions SET status = 'collecting' WHERE id = $1 AND status = 'analyzing';", uuid.UUID(session_id))
+        self._run_async(_impl())
+
+    def confirm_relationship_balance_finished(self, session_id: str, telegram_id: int) -> bool:
+        async def _impl():
+            pool = await self._get_pool()
+            async with pool.acquire() as conn:
+                async with conn.transaction():
+                    row = await conn.fetchrow("""
+                        SELECT b.*, c.partner_1_id, c.partner_2_id
+                        FROM relationship_balance_sessions b JOIN couples c ON c.id = b.couple_id
+                        WHERE b.id = $1 FOR UPDATE OF b;
+                    """, uuid.UUID(session_id))
+                    if not row or row["status"] != "completed":
+                        return False
+                    if telegram_id == row["partner_1_id"]:
+                        await conn.execute("UPDATE relationship_balance_sessions SET finish_confirmed_by_p1 = true WHERE id = $1;", uuid.UUID(session_id))
+                    elif telegram_id == row["partner_2_id"]:
+                        await conn.execute("UPDATE relationship_balance_sessions SET finish_confirmed_by_p2 = true WHERE id = $1;", uuid.UUID(session_id))
+                    else:
+                        return False
+                    done = await conn.fetchval("""
+                        SELECT finish_confirmed_by_p1 AND finish_confirmed_by_p2
+                        FROM relationship_balance_sessions WHERE id = $1;
+                    """, uuid.UUID(session_id))
+                    if done:
+                        await conn.execute("DELETE FROM relationship_balance_sessions WHERE id = $1;", uuid.UUID(session_id))
+                    return bool(done)
+        return self._run_async(_impl())
+
+    def purge_expired_relationship_balances(self, ttl_hours: int = 48) -> int:
+        async def _impl():
+            pool = await self._get_pool()
+            async with pool.acquire() as conn:
+                result = await conn.execute("""
+                    DELETE FROM relationship_balance_sessions
+                    WHERE COALESCE(completed_at, created_at) <= now() - ($1 * interval '1 hour');
+                """, ttl_hours)
+                return int(result.split()[-1])
         return self._run_async(_impl())
 
 

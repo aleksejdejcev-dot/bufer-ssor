@@ -17,7 +17,8 @@ import {
   Lock,
   ArrowRight,
   History,
-  MessageCircle
+  MessageCircle,
+  Activity,
 } from 'lucide-react';
 import WebApp from '@twa-dev/sdk';
 import { api } from '../api/client';
@@ -25,7 +26,7 @@ import HintModal from '../components/HintModal';
 import ConfirmModal from '../components/ConfirmModal';
 import LegalModal from '../components/LegalModal';
 
-export default function Home({ meData, onStartSession, onOpenActiveSession, onRefreshProfile, onPaywallRequired }) {
+export default function Home({ meData, onStartSession, onOpenActiveSession, onStartBalance, onRefreshProfile, onPaywallRequired }) {
   const user = meData?.user || {};
   const couple = meData?.couple || null;
   const activeSession = meData?.active_session || null;
@@ -395,6 +396,20 @@ export default function Home({ meData, onStartSession, onOpenActiveSession, onRe
           </div>
         </div>
 
+        <button
+          type="button"
+          onClick={onStartBalance}
+          disabled={!couple?.has_partner}
+          className="w-full rounded-2xl border border-violet-200 dark:border-violet-900/70 bg-violet-50/70 dark:bg-violet-950/30 p-4 text-left flex items-center gap-3 disabled:opacity-70"
+        >
+          <span className="w-10 h-10 rounded-xl bg-violet-100 dark:bg-violet-900/60 text-violet-600 dark:text-violet-300 flex items-center justify-center shrink-0"><Activity size={20} /></span>
+          <span className="min-w-0 flex-1">
+            <span className="block text-sm font-bold text-slate-900 dark:text-slate-100">Баланс отношений</span>
+            <span className="block text-xs text-slate-500 dark:text-slate-400 mt-0.5">{couple?.has_partner ? 'Короткий check-in для вас обоих и идеи, чем заняться вместе' : 'Подключите партнёра, чтобы пройти вместе'}</span>
+          </span>
+          {couple?.has_partner && <ArrowRight size={18} className="text-violet-500 shrink-0" />}
+        </button>
+
         {/* =================================================================== */}
         {/* ЭЛЕМЕНТ 2: Центральная большая кнопка разбора конфликта             */}
         {/* =================================================================== */}
@@ -578,8 +593,8 @@ export default function Home({ meData, onStartSession, onOpenActiveSession, onRe
         onConfirm={handleConfirmDeleteHistory}
         isDeleting={isDeletingHistory}
         isSingleStep={true}
-        title="Очистить историю разборов?"
-        description="Все завершенные сессии и карточки разбора будут удалены. Связка в паре и подписка останутся."
+        title="Очистить историю пары?"
+        description="Удалятся результаты разборов, ответы и результаты баланса отношений, а также оценки настроения. Связка в паре и подписка останутся."
         confirmText="Очистить историю"
       />
 

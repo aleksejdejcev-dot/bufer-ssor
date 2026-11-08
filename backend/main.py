@@ -27,13 +27,14 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Depends, Header, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from aiogram.types import Update
 
 from config import settings
 from config.ui_texts import get_script_hints
 from rate_limiter import generate_crockford_code, normalize_invite_code
 import db
+import crypto
 from repo import close_repo, get_repo
 from retention_scheduler import retention_worker_loop
 from bot import (
@@ -44,11 +45,14 @@ from bot import (
     notify_initiator_prompt,
     notify_partner_prompt,
     notify_conflict_partner_prompt,
+    notify_balance_partner_prompt,
+    notify_balance_ready,
     send_white_flag,
     send_hint_message,
     send_subscription_success,
     send_subscription_refund_notice,
 )
+from balance_service import analyze_balance
 from yookassa_service import (
     create_yookassa_payment,
     get_yookassa_payment,
@@ -410,6 +414,17 @@ class LegalAcceptRequest(BaseModel):
 
 class CoupleJoinRequest(BaseModel):
     invite_code: str = Field(..., min_length=4, max_length=32)
+
+
+class RelationshipBalanceAnswers(BaseModel):
+    answers: list[int] = Field(..., min_length=6, max_length=6)
+
+    @field_validator("answers")
+    @classmethod
+    def validate_answers(cls, value):
+        if any(answer < 1 or answer > 5 for answer in value):
+            raise ValueError("Каждый ответ должен быть от 1 до 5")
+        return value
 
 
 class MoodRequest(BaseModel):
@@ -834,6 +849,84 @@ async def join_couple_from_invite(
     partner = db.get_user(couple["partner_1_id"])
     asyncio.create_task(notify_partner_prompt(couple["partner_1_id"], user.get("first_name", "Партнер")))
     return {"status": "joined", "partner_name": partner.get("first_name", "Партнер") if partner else "Партнер"}
+
+
+@app.post("/relationship-balance/start")
+async def start_relationship_balance(user: dict = Depends(require_legal_accepted)):
+    couple = db.get_user_couple(user["telegram_id"])
+    if not couple or not couple.get("partner_2_id"):
+        raise HTTPException(status_code=400, detail="Для баланса отношений сначала подключите партнера")
+    session = db.start_relationship_balance(couple["id"])
+    is_p1 = user["telegram_id"] == couple["partner_1_id"]
+    if session.get("created"):
+        partner_id = couple["partner_2_id"] if is_p1 else couple["partner_1_id"]
+        asyncio.create_task(notify_balance_partner_prompt(partner_id))
+    return {"id": session["id"], "status": session["status"],
+            "answered": bool(session.get("answers_p1" if is_p1 else "answers_p2"))}
+
+
+def _balance_access(session_id: str, telegram_id: int):
+    session = db.get_relationship_balance(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Баланс отношений не найден или уже удалён")
+    couple = db.get_couple_by_id(session["couple_id"])
+    if not couple or telegram_id not in (couple["partner_1_id"], couple.get("partner_2_id")):
+        raise HTTPException(status_code=403, detail="Доступ к этому балансу запрещён")
+    return session, couple, telegram_id == couple["partner_1_id"]
+
+
+@app.get("/relationship-balance/{session_id}")
+async def get_relationship_balance(session_id: str, user: dict = Depends(require_legal_accepted)):
+    session, _couple, is_p1 = _balance_access(session_id, user["telegram_id"])
+    return {
+        "id": session["id"], "status": session["status"],
+        "answered": bool(session.get("answers_p1" if is_p1 else "answers_p2")),
+        "result": session.get("result") if session["status"] == "completed" else None,
+        "finish_confirmed_by_me": session.get("finish_confirmed_by_p1" if is_p1 else "finish_confirmed_by_p2", False),
+    }
+
+
+@app.post("/relationship-balance/{session_id}/answer")
+async def submit_relationship_balance_answer(
+    session_id: str,
+    payload: RelationshipBalanceAnswers,
+    user: dict = Depends(require_legal_accepted),
+):
+    session, couple, is_p1 = _balance_access(session_id, user["telegram_id"])
+    if session["status"] == "completed":
+        return {"status": "completed", "result": session.get("result")}
+    encrypted = crypto.encrypt_text(json.dumps(payload.answers))
+    session = db.submit_relationship_balance(session_id, is_p1, encrypted)
+    if not session:
+        session = db.get_relationship_balance(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Баланс отношений уже удалён")
+    if session["status"] == "completed":
+        return {"status": "completed", "result": session.get("result")}
+    if not session or not session.get("answers_p1") or not session.get("answers_p2"):
+        return {"status": session["status"] if session["status"] == "analyzing" else "waiting_partner"}
+    if not db.claim_relationship_balance_analysis(session_id):
+        return {"status": "analyzing"}
+    try:
+        answers_1 = json.loads(crypto.decrypt_text(session["answers_p1"]))
+        answers_2 = json.loads(crypto.decrypt_text(session["answers_p2"]))
+        result = await analyze_balance(answers_1, answers_2)
+        db.complete_relationship_balance(session_id, result)
+        for participant_id in (couple["partner_1_id"], couple["partner_2_id"]):
+            if participant_id:
+                asyncio.create_task(notify_balance_ready(participant_id))
+    except Exception as exc:
+        db.reset_relationship_balance_analysis(session_id)
+        logger.warning("Relationship balance analysis unavailable (%s)", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="Не удалось подготовить итог. Попробуйте отправить ответы ещё раз.")
+    return {"status": "completed", "result": result}
+
+
+@app.post("/relationship-balance/{session_id}/finish")
+async def finish_relationship_balance(session_id: str, user: dict = Depends(require_legal_accepted)):
+    _balance_access(session_id, user["telegram_id"])
+    finished = db.confirm_relationship_balance_finished(session_id, user["telegram_id"])
+    return {"status": "finished" if finished else "waiting_partner", "finished": finished}
 
 
 @app.delete("/history")

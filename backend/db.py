@@ -71,6 +71,34 @@ def get_latest_completed_session(couple_id: str) -> Optional[Dict[str, Any]]:
     return get_repo().get_latest_completed_session(couple_id)
 
 
+def start_relationship_balance(couple_id: str) -> Dict[str, Any]:
+    return get_repo().start_relationship_balance(couple_id)
+
+
+def get_relationship_balance(session_id: str) -> Optional[Dict[str, Any]]:
+    return get_repo().get_relationship_balance(session_id)
+
+
+def submit_relationship_balance(session_id: str, is_partner_1: bool, encrypted_answers: bytes) -> Dict[str, Any]:
+    return get_repo().submit_relationship_balance(session_id, is_partner_1, encrypted_answers)
+
+
+def complete_relationship_balance(session_id: str, result: Dict[str, Any]) -> None:
+    return get_repo().complete_relationship_balance(session_id, result)
+
+
+def claim_relationship_balance_analysis(session_id: str) -> bool:
+    return get_repo().claim_relationship_balance_analysis(session_id)
+
+
+def reset_relationship_balance_analysis(session_id: str) -> None:
+    return get_repo().reset_relationship_balance_analysis(session_id)
+
+
+def confirm_relationship_balance_finished(session_id: str, telegram_id: int) -> bool:
+    return get_repo().confirm_relationship_balance_finished(session_id, telegram_id)
+
+
 def get_session_by_id(session_id: str) -> Optional[Dict[str, Any]]:
     return get_repo().get_session_by_id(session_id)
 

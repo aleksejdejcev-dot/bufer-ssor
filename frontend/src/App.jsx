@@ -4,6 +4,7 @@ import { api, ApiError } from './api/client';
 import Onboarding from './screens/Onboarding';
 import Home from './screens/Home';
 import Session from './screens/Session';
+import RelationshipBalance from './screens/RelationshipBalance';
 import PaywallStub from './components/PaywallStub';
 import LandingPage from './screens/LandingPage';
 import { Sparkles, AlertCircle, RefreshCw } from 'lucide-react';
@@ -12,6 +13,7 @@ export default function App() {
   const [currentScreen, setCurrentScreen] = useState('loading'); // 'loading' | 'onboarding' | 'home' | 'session' | 'paywall'
   const [meData, setMeData] = useState(null);
   const [activeSessionId, setActiveSessionId] = useState(null);
+  const [balanceSessionId, setBalanceSessionId] = useState(null);
   const [initError, setInitError] = useState(null);
   const inviteHandledRef = useRef(false);
   const inviteCode = new URLSearchParams(window.location.search).get('invite');
@@ -197,6 +199,10 @@ export default function App() {
     );
   }
 
+  if (currentScreen === 'balance' && balanceSessionId) {
+    return <RelationshipBalance sessionId={balanceSessionId} onBack={() => { setCurrentScreen('home'); loadProfile(); }} />;
+  }
+
   // ЭКРАН 2: Главный экран
   return (
     <Home
@@ -204,6 +210,15 @@ export default function App() {
       onStartSession={(sessionId) => {
         setActiveSessionId(sessionId);
         setCurrentScreen('session');
+      }}
+      onStartBalance={async () => {
+        try {
+          const balance = await api.startRelationshipBalance();
+          setBalanceSessionId(balance.id);
+          setCurrentScreen('balance');
+        } catch (err) {
+          WebApp.showAlert(err.message || 'Не удалось начать баланс отношений');
+        }
       }}
       onOpenActiveSession={(sessionId) => {
         setActiveSessionId(sessionId);
