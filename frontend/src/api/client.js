@@ -89,7 +89,16 @@ async function request(endpoint, options = {}) {
   } else {
     try {
       const text = await response.text();
-      data = text ? { detail: text } : null;
+      const isHtml = /^\s*<(?:!doctype\s+html|html|head|body)\b/i.test(text);
+      data = text
+        ? {
+            detail: isHtml
+              ? response.status === 405
+                ? 'Сервер не принял запрос. Обновите приложение и попробуйте снова.'
+                : `Сервер вернул ошибку (${response.status}). Попробуйте ещё раз позже.`
+              : text,
+          }
+        : null;
     } catch {
       data = null;
     }

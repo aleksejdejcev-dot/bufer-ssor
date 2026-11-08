@@ -316,7 +316,7 @@ export default function Home({ meData, onStartSession, onOpenActiveSession, onSt
         </div>
 
         {globalError && (
-          <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 text-xs border border-rose-200 dark:border-rose-900 flex items-center justify-between animate-fade-in">
+          <div role="alert" className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 text-xs border border-rose-200 dark:border-rose-900 flex items-center justify-between gap-2 animate-fade-in">
             <span>{globalError}</span>
             <button
               onClick={() => setGlobalError(null)}
@@ -420,14 +420,14 @@ export default function Home({ meData, onStartSession, onOpenActiveSession, onSt
           onClick={handleStartBalance}
           disabled={isStartingBalance}
           aria-busy={isStartingBalance}
-          className="w-full rounded-2xl border border-violet-200 dark:border-violet-900/70 bg-violet-50/70 dark:bg-violet-950/30 p-4 text-left flex items-center gap-3 balance-launch-card app-interactive-card"
+          className="w-full rounded-2xl border border-emerald-200/80 dark:border-emerald-900/60 p-4 text-left flex items-center gap-3 balance-launch-card app-interactive-card"
         >
-          <span className="w-10 h-10 rounded-xl bg-violet-100 dark:bg-violet-900/60 text-violet-600 dark:text-violet-300 flex items-center justify-center shrink-0">{isStartingBalance ? <Activity size={20} className="animate-spin" /> : <Activity size={20} />}</span>
+          <span className="w-10 h-10 rounded-xl bg-emerald-100 dark:bg-emerald-900/60 text-emerald-700 dark:text-emerald-300 flex items-center justify-center shrink-0">{isStartingBalance ? <Activity size={20} className="animate-spin" /> : <Activity size={20} />}</span>
           <span className="min-w-0 flex-1">
             <span className="block text-sm font-bold text-slate-900 dark:text-slate-100">Баланс отношений</span>
             <span className="block text-xs text-slate-500 dark:text-slate-400 mt-0.5">{isStartingBalance ? 'Открываем ваш баланс…' : couple?.has_partner ? 'Короткий check-in для вас обоих и идеи, чем заняться вместе' : 'Подключите партнёра, чтобы пройти вместе'}</span>
           </span>
-          {couple?.has_partner && !isStartingBalance && <ArrowRight size={18} className="text-violet-500 shrink-0" />}
+          {couple?.has_partner && !isStartingBalance && <ArrowRight size={18} className="text-emerald-700 dark:text-emerald-300 shrink-0" />}
         </button>
 
         {/* =================================================================== */}

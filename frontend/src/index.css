@@ -4,15 +4,15 @@
 
 :root {
   color-scheme: light;
-  --app-bg: #faf9fc;
+  --app-bg: #f6f3ed;
   --app-surface: rgba(255, 255, 255, 0.9);
-  --app-border: rgba(104, 91, 137, 0.12);
-  --app-shadow: 0 14px 40px rgba(49, 37, 82, 0.07);
-  --tg-theme-bg-color: #faf9fc;
-  --tg-theme-text-color: #241f30;
-  --tg-theme-hint-color: #777185;
-  --tg-theme-link-color: #6e5bd1;
-  --tg-theme-button-color: #6e5bd1;
+  --app-border: rgba(47, 91, 78, 0.13);
+  --app-shadow: 0 16px 42px rgba(38, 61, 51, 0.09);
+  --tg-theme-bg-color: #f6f3ed;
+  --tg-theme-text-color: #202c28;
+  --tg-theme-hint-color: #74817b;
+  --tg-theme-link-color: #197b68;
+  --tg-theme-button-color: #197b68;
   --tg-theme-button-text-color: #ffffff;
   --tg-theme-secondary-bg-color: #f2f0f7;
   --tg-theme-header-bg-color: #ffffff;
@@ -22,18 +22,18 @@
 
 html.dark {
   color-scheme: dark;
-  --app-bg: #15131b;
-  --app-surface: rgba(34, 31, 43, 0.92);
-  --app-border: rgba(203, 190, 240, 0.1);
-  --app-shadow: 0 16px 44px rgba(0, 0, 0, 0.24);
-  --tg-theme-bg-color: #15131b;
-  --tg-theme-text-color: #f2eff8;
-  --tg-theme-hint-color: #a19aac;
-  --tg-theme-link-color: #a394fa;
-  --tg-theme-button-color: #806de3;
-  --tg-theme-secondary-bg-color: #211e28;
-  --tg-theme-header-bg-color: #1b1822;
-  --tg-theme-section-bg-color: #211e28;
+  --app-bg: #121b19;
+  --app-surface: rgba(30, 43, 39, 0.94);
+  --app-border: rgba(174, 218, 199, 0.11);
+  --app-shadow: 0 18px 46px rgba(0, 0, 0, 0.28);
+  --tg-theme-bg-color: #121b19;
+  --tg-theme-text-color: #eff5ef;
+  --tg-theme-hint-color: #a2b1a8;
+  --tg-theme-link-color: #72c7aa;
+  --tg-theme-button-color: #208a72;
+  --tg-theme-secondary-bg-color: #1b2925;
+  --tg-theme-header-bg-color: #18231f;
+  --tg-theme-section-bg-color: #1b2925;
 }
 
 /* Применение системных цветов Telegram WebApp, если доступны */
@@ -47,8 +47,8 @@ body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   background-color: var(--app-bg);
   background-image:
-    radial-gradient(ellipse 85% 42% at 50% -12%, rgba(133, 111, 222, 0.1), transparent 74%),
-    radial-gradient(ellipse 48% 32% at 100% 55%, rgba(237, 172, 177, 0.055), transparent 78%);
+    radial-gradient(ellipse 82% 44% at 4% -14%, rgba(104, 185, 149, 0.16), transparent 74%),
+    radial-gradient(ellipse 56% 38% at 100% 48%, rgba(244, 129, 102, 0.11), transparent 78%);
   color: var(--tg-theme-text-color);
   overflow-x: hidden;
   min-height: 100vh;
@@ -58,8 +58,8 @@ body {
 
 html.dark body {
   background-image:
-    radial-gradient(ellipse 82% 42% at 50% -12%, rgba(111, 92, 190, 0.16), transparent 74%),
-    radial-gradient(ellipse 52% 38% at 100% 62%, rgba(125, 78, 111, 0.09), transparent 78%);
+    radial-gradient(ellipse 82% 42% at 5% -12%, rgba(67, 155, 122, 0.18), transparent 74%),
+    radial-gradient(ellipse 52% 38% at 100% 62%, rgba(227, 112, 86, 0.11), transparent 78%);
 }
 
 /* Плавный скролл */
@@ -152,10 +152,10 @@ input:focus-visible {
   position: relative;
   overflow: hidden;
   isolation: isolate;
-  background-image: linear-gradient(118deg, #6555d6 0%, #7957dc 52%, #9262df 100%) !important;
+  background-image: linear-gradient(118deg, #147b6d 0%, #238d76 48%, #e07a5f 125%) !important;
   background-size: 180% 180%;
   animation: gradientDrift 14s ease-in-out infinite;
-  box-shadow: 0 18px 42px rgba(104, 79, 197, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.2);
+  box-shadow: 0 18px 42px rgba(22, 112, 91, 0.24), inset 0 1px 0 rgba(255, 255, 255, 0.22);
 }
 
 .home-conflict-card::after {
@@ -183,20 +183,20 @@ input:focus-visible {
 
 .balance-hero {
   background-image:
-    radial-gradient(circle at 90% 8%, rgba(255, 255, 255, 0.2), transparent 34%),
-    linear-gradient(125deg, #6455d4, #7959d8 56%, #8d65d7) !important;
+    radial-gradient(circle at 92% 5%, rgba(255, 196, 155, 0.32), transparent 34%),
+    linear-gradient(125deg, #126c61, #208c76 56%, #d87960) !important;
   background-size: 150% 150%;
   animation: gradientDrift 16s ease-in-out infinite;
-  box-shadow: 0 18px 40px rgba(91, 69, 170, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.2);
+  box-shadow: 0 18px 40px rgba(18, 108, 97, 0.24), inset 0 1px 0 rgba(255, 255, 255, 0.2);
 }
 
 .balance-launch-card {
-  background: linear-gradient(110deg, rgba(243, 241, 255, 0.92), rgba(250, 244, 250, 0.92)) !important;
-  box-shadow: 0 8px 24px rgba(78, 63, 132, 0.055);
+  background: linear-gradient(112deg, rgba(231, 246, 237, 0.96), rgba(255, 239, 226, 0.94)) !important;
+  box-shadow: 0 10px 28px rgba(32, 105, 82, 0.1);
 }
 
 .dark .balance-launch-card {
-  background: linear-gradient(110deg, rgba(43, 37, 63, 0.86), rgba(46, 35, 50, 0.86)) !important;
+  background: linear-gradient(112deg, rgba(24, 67, 56, 0.88), rgba(69, 46, 42, 0.88)) !important;
 }
 
 .app-interactive-card {

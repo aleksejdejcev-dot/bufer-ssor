@@ -28,6 +28,10 @@ export default defineConfig({
         target: 'http://localhost:8000',
         changeOrigin: true,
       },
+      '/relationship-balance': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+      },
       '/mood': {
         target: 'http://localhost:8000',
         changeOrigin: true,
